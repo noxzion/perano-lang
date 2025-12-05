@@ -1,35 +1,18 @@
-# novaria-language
+<div align="center" style="display:grid;place-items:center;">
+<p>
+    <a href="https://github.com/noxzion/perano-lang"><img width="80" src="https://github.com/z3nnix/perano-lang/blob/main/logo.png?raw=true" alt="Perano logo"></a>
+</p>
+<h1>The Perano Programming Language</h1>
+This repository contains the Perano compiler, Perano's standard library and tools.
+</div>
+<br>
 
-ЯП с компиляцией под ELF, PE, NVM байткод.
+> [!IMPORTANT]
+> The current implementation of Perano is not final. It may be unstable and non-fully.
 
-Быстрый старт:
-```bash
-git clone https://github.com/noxzion/novaria-language.git
-cd novaria-language
-cargo build --release
-```
 
-## Компиляция программ
+### Examples
 
-### Windows (PE):
-```bash
-.\target\release\novaira-language.exe examples\main.nl
-.\examples\main.exe
-```
+📜 Examples can be found in the `examples/`[*](https://github.com/noxzion/perano-lang/tree/main/examples) directory.
 
-### Linux (ELF):
-```bash
-./target/release/novaira-language examples/main.nl --elf
-./examples/main
-```
-
-### NVM байткод (для NovariaOS):
-```bash
-# Компиляция в BIN (NovariaOS executable)
-.\t\target\release\novaira-language.exe examples\test_nvm.nl --novaria
-# Создаст файл examples\test_nvm.bin для запуска в NovariaOS
-
-# Генерация читаемого ассемблерного кода
-.\target\release\novaira-language.exe examples\test_nvm.nl --nvm-code
-# Создаст файл examples\test_nvm.asm с NVM assembly кодом
-```
+Original author is [zennix](https://github.com/z3nnix/perano-lang)

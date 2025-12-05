@@ -16,7 +16,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <source.nl> [--elf|--nvm-code|--novaria]", args[0]);
+        eprintln!("Usage: {} <source.per> [--elf|--nvm-code|--novaria]", args[0]);
         process::exit(1);
     }
 
@@ -73,21 +73,21 @@ fn main() {
 
     let output_file = match target {
         "nvm-code" => {
-            if source_file.ends_with(".nl") {
-                source_file.replace(".nl", ".asm")
+            if source_file.ends_with(".per") {
+                source_file.replace(".per", ".asm")
             } else {
                 format!("{}.asm", source_file)
             }
         }
         "novaria" => {
-            if source_file.ends_with(".nl") {
-                source_file.replace(".nl", ".bin")
+            if source_file.ends_with(".per") {
+                source_file.replace(".per", ".bin")
             } else {
                 format!("{}.bin", source_file)
             }
         }
         "elf" => {
-            if source_file.ends_with(".nl") {
+            if source_file.ends_with(".per") {
                 source_file[..source_file.len()-3].to_string()
             } else if source_file.ends_with(".go") {
                 source_file[..source_file.len()-3].to_string()
@@ -96,8 +96,8 @@ fn main() {
             }
         }
         _ => {
-            if source_file.ends_with(".nl") {
-                source_file.replace(".nl", ".exe")
+            if source_file.ends_with(".per") {
+                source_file.replace(".per", ".exe")
             } else {
                 source_file.replace(".go", ".exe")
             }
@@ -139,7 +139,7 @@ fn load_modules(ast: &mut ast::Program, base_dir: &Path, loaded: &mut HashSet<St
         loaded.insert(module_name.clone());
 
         
-        let module_filename = format!("{}.nl", module_name);
+        let module_filename = format!("{}.per", module_name);
         
         
         let mut module_file = base_dir.join(&module_filename);

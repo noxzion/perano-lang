@@ -352,7 +352,7 @@ impl<'a> CodeGen<'a> {
                         self.emit(&[0x48, 0x31, 0xC0]);
                     }
                 } else {
-                    self.generate_inline_call(function, args);
+                    self.generate_iperine_call(function, args);
                 }
             }
             Expression::ModuleCall { module, function, args } => {
@@ -604,7 +604,7 @@ impl<'a> CodeGen<'a> {
         }
     }
 
-    fn generate_inline_call(&mut self, function: &str, args: &[Expression]) {
+    fn generate_iperine_call(&mut self, function: &str, args: &[Expression]) {
         let saved_vars = self.variables.clone();
         let saved_offset = self.stack_offset;
         let saved_in_main = self.in_main;

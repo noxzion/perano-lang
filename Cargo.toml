@@ -1,5 +1,5 @@
 [package]
-name = "novaria-language"
+name = "perano-lang"
 version = "0.4.0"
 edition = "2021"
 

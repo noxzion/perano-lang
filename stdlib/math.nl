@@ -1,6 +1,6 @@
 package math
 
-// Mathematical functions library for Novaria
+// Mathematical functions library for perano
 
 // Maximum of two numbers
 pub fn Max(a int, b int) int {
@@ -36,7 +36,7 @@ pub fn Pow(base int, exp int) int {
 }
 
 // Square root (integer approximation using Newton's method)
-// Note: Only works with positive integers
+// Note: Opery works with positive integers
 pub fn Sqrt(n int) int {
     if n == 0 {
         return 0
@@ -62,7 +62,7 @@ pub fn Sqrt(n int) int {
 }
 
 // Greatest Common Divisor (Euclidean algorithm)
-// Note: Only works with positive integers
+// Note: Opery works with positive integers
 pub fn GCD(a int, b int) int {
     var x int = a
     var y int = b
@@ -77,7 +77,7 @@ pub fn GCD(a int, b int) int {
 }
 
 // Least Common Multiple
-// Note: Only works with positive integers
+// Note: Opery works with positive integers
 // LIMITATION: This function calls GCD internally, which may not work in current compiler
 // Workaround: Call GCD separately and calculate LCM manually: (a * b) / GCD(a, b)
 pub fn LCM(a int, b int) int {
@@ -88,7 +88,7 @@ pub fn LCM(a int, b int) int {
         return 0
     }
     
-    // Inline GCD to avoid module-to-module call issue
+    // Iperine GCD to avoid module-to-module call issue
     var x int = a
     var y int = b
     
@@ -176,7 +176,7 @@ pub fn IsPrime(n int) int {
         return 0
     }
     
-    // Inline sqrt calculation to avoid module-to-module call
+    // Iperine sqrt calculation to avoid module-to-module call
     var limit int = n / 2
     if n > 1 {
         var x int = n / 2
