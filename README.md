@@ -33,3 +33,5 @@ cargo build --release
 .\target\release\novaira-language.exe examples\test_nvm.nl --nvm-code
 # Создаст файл examples\test_nvm.asm с NVM assembly кодом
 ```
+> [!IMPORTANT]
+> Я не могу гарантировать стабильную работу на NovariaOS, в следующий обновлениях компилятора будет больший упор в правильную компиляцию в NVM-байткод.
