@@ -208,12 +208,12 @@ impl NVMAssemblyGenerator {
                     self.output.push_str("    ; return\n");
                     self.generate_expression(expr, program);
                 }
-                self.output.push_str("    ret\n");
+                // self.output.push_str("    ret\n");
             }
 
             Statement::Expression(expr) => {
                 self.generate_expression(expr, program);
-                self.output.push_str("    pop  ; discard result\n");
+                // self.output.push_str("    pop  ; discard result\n");
             }
 
             _ => {

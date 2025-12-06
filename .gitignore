@@ -25,3 +25,5 @@ target/*
 
 # Temporary test files
 examples/tmp_*
+perano
+run.sh

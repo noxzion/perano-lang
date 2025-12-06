@@ -244,12 +244,13 @@ impl NVMCodeGen {
                 if let Some(expr) = value {
                     self.generate_expression(expr, program);
                 }
-                self.emit_byte(RET);
+                self.emit_byte(SYSCALL);
+                self.emit_byte(SYSCALL_EXIT);
             }
 
             Statement::Expression(expr) => {
                 self.generate_expression(expr, program);
-                self.emit_byte(POP);
+                // self.emit_byte(POP);
             }
 
             _ => {}
