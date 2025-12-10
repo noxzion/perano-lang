@@ -51,7 +51,7 @@ impl PEWriter {
             self.align(machine_code.data.len() as u32, self.file_alignment)
         };
 
-        let mut num_sections = 1; // .text always present
+        let mut num_sections = 1;
         if import_size > 0 { num_sections += 1; }
         if data_size > 0 { num_sections += 1; }
 
@@ -229,7 +229,6 @@ impl PEWriter {
         buffer.extend_from_slice(&0u16.to_le_bytes());
         buffer.extend_from_slice(&0x60000020u32.to_le_bytes());
 
-        // .data section
         if data_size > 0 {
             let data_name = b".data\0\0\0";
             buffer.extend_from_slice(data_name);
@@ -243,10 +242,9 @@ impl PEWriter {
             buffer.extend_from_slice(&0u32.to_le_bytes());
             buffer.extend_from_slice(&0u16.to_le_bytes());
             buffer.extend_from_slice(&0u16.to_le_bytes());
-            buffer.extend_from_slice(&0xC0000040u32.to_le_bytes()); // READ | WRITE
+            buffer.extend_from_slice(&0xC0000040u32.to_le_bytes());
         }
 
-        // .idata section
         if import_size > 0 {
             let idata_name = b".idata\0\0";
             buffer.extend_from_slice(idata_name);
@@ -279,18 +277,16 @@ impl PEWriter {
 
         let base_rva = 0x1000 + self.section_alignment;
 
-        // Two DLL descriptors: KERNEL32.dll and msvcrt.dll
         let descriptor_offset = data.len();
-        data.extend_from_slice(&[0u8; 60]); // 2 descriptors + null terminator
+        data.extend_from_slice(&[0u8; 60]);
 
-        // === KERNEL32.dll ===
         let kernel32_name_rva = base_rva + data.len() as u32;
         data.extend_from_slice(b"KERNEL32.dll\0");
         while data.len() % 2 != 0 { data.push(0); }
 
         let kernel32_ilt_rva = base_rva + data.len() as u32;
         let kernel32_ilt_start = data.len();
-        data.extend_from_slice(&[0u8; 32]); // 4 imports * 8 bytes
+        data.extend_from_slice(&[0u8; 32]);
 
         let kernel32_iat_rva = base_rva + data.len() as u32;
         let kernel32_iat_start = data.len();
@@ -316,14 +312,13 @@ impl PEWriter {
         data.extend_from_slice(b"ExitProcess\0");
         while data.len() % 2 != 0 { data.push(0); }
 
-        // === MSVCRT.dll ===
         let msvcrt_name_rva = base_rva + data.len() as u32;
         data.extend_from_slice(b"msvcrt.dll\0");
         while data.len() % 2 != 0 { data.push(0); }
 
         let msvcrt_ilt_rva = base_rva + data.len() as u32;
         let msvcrt_ilt_start = data.len();
-        data.extend_from_slice(&[0u8; 24]); // 3 imports * 8 bytes
+        data.extend_from_slice(&[0u8; 24]);
 
         let msvcrt_iat_rva = base_rva + data.len() as u32;
         let msvcrt_iat_start = data.len();
@@ -343,7 +338,6 @@ impl PEWriter {
         data.extend_from_slice(b"strcat\0");
         while data.len() % 2 != 0 { data.push(0); }
 
-        // Fill ILT and IAT for KERNEL32
         for (i, &rva) in kernel32_hint_rvas.iter().enumerate() {
             let offset = kernel32_ilt_start + i * 8;
             data[offset..offset+8].copy_from_slice(&(rva as u64).to_le_bytes());
@@ -351,7 +345,6 @@ impl PEWriter {
             data[offset..offset+8].copy_from_slice(&(rva as u64).to_le_bytes());
         }
 
-        // Fill ILT and IAT for MSVCRT
         for (i, &rva) in msvcrt_hint_rvas.iter().enumerate() {
             let offset = msvcrt_ilt_start + i * 8;
             data[offset..offset+8].copy_from_slice(&(rva as u64).to_le_bytes());
@@ -359,14 +352,12 @@ impl PEWriter {
             data[offset..offset+8].copy_from_slice(&(rva as u64).to_le_bytes());
         }
 
-        // Write KERNEL32 descriptor
         data[descriptor_offset..descriptor_offset+4].copy_from_slice(&kernel32_ilt_rva.to_le_bytes());
         data[descriptor_offset+4..descriptor_offset+8].copy_from_slice(&0u32.to_le_bytes());
         data[descriptor_offset+8..descriptor_offset+12].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes());
         data[descriptor_offset+12..descriptor_offset+16].copy_from_slice(&kernel32_name_rva.to_le_bytes());
         data[descriptor_offset+16..descriptor_offset+20].copy_from_slice(&kernel32_iat_rva.to_le_bytes());
 
-        // Write MSVCRT descriptor
         let msvcrt_desc_offset = descriptor_offset + 20;
         data[msvcrt_desc_offset..msvcrt_desc_offset+4].copy_from_slice(&msvcrt_ilt_rva.to_le_bytes());
         data[msvcrt_desc_offset+4..msvcrt_desc_offset+8].copy_from_slice(&0u32.to_le_bytes());
@@ -384,7 +375,6 @@ impl PEWriter {
         
         let data_rva = 0x1000 + self.align(code_size, self.section_alignment);
         
-        // Find and patch 0x40000000 placeholders (references to .data buffer)
         for i in 0..code.len().saturating_sub(6) {
             if code[i] == 0x48 && code[i+1] == 0x8D && code[i+2] == 0x1D {
                 let placeholder = i32::from_le_bytes([
@@ -392,7 +382,6 @@ impl PEWriter {
                 ]);
                 
                 if placeholder == 0x40000000u32 as i32 {
-                    // Calculate RIP-relative offset to .data buffer
                     let instr_end = i + 7;
                     let target_rva = instr_end as u32 + 0x1000;
                     let offset = (data_rva as i32) - (target_rva as i32);
@@ -408,38 +397,25 @@ impl PEWriter {
             idata_rva += self.align(data_size, self.section_alignment);
         }
 
-        // IMPORTANT: Must match exact layout from build_import_data()
-        // Start offset in .idata section
         let mut offset: u32 = 0;
         
-        // Import descriptors: 60 bytes (3 * 20: KERNEL32, msvcrt, null terminator)
         offset += 60;
         
-        // KERNEL32.dll name: "KERNEL32.dll\0" = 13 bytes + 1 padding = 14
         offset += 14;
         
-        // KERNEL32 ILT: 32 bytes (4 * 8: 3 imports + null)
         offset += 32;
         
-        // KERNEL32 IAT: 32 bytes - THIS IS WHAT WE NEED
         let kernel32_iat_rva = idata_rva + offset;
         offset += 32;
         
-        // KERNEL32 hint/name entries:
-        // "GetStdHandle": 2 (hint) + 13 (string) = 15, padded to 16
         offset += 16;
-        // "WriteFile": 2 + 10 = 12 (already even, no padding)
         offset += 12;
-        // "ExitProcess": 2 + 12 = 14 (already even, no padding)
         offset += 14;
         
-        // msvcrt.dll name: "msvcrt.dll\0" = 11 bytes + 1 padding = 12
         offset += 12;
         
-        // MSVCRT ILT: 24 bytes (3 * 8: sprintf, strcat, null)
         offset += 24;
         
-        // MSVCRT IAT: 24 bytes - THIS IS WHAT WE NEED
         let msvcrt_iat_rva = idata_rva + offset;
 
         for i in 0..code.len().saturating_sub(5) {
@@ -452,19 +428,14 @@ impl PEWriter {
                 let target_rva = instr_end as u32 + 0x1000;
 
                 let offset = if placeholder == 0x2000_0000u32 as i32 {
-                    // GetStdHandle
                     (kernel32_iat_rva as i32) - (target_rva as i32)
                 } else if placeholder == 0x2008_0000u32 as i32 {
-                    // WriteFile
                     (kernel32_iat_rva as i32 + 8) - (target_rva as i32)
                 } else if placeholder == 0x1000_0000u32 as i32 {
-                    // ExitProcess
                     (kernel32_iat_rva as i32 + 16) - (target_rva as i32)
                 } else if placeholder == 0x3000_0000u32 as i32 {
-                    // sprintf
                     (msvcrt_iat_rva as i32) - (target_rva as i32)
                 } else if placeholder == 0x3008_0000u32 as i32 {
-                    // strcat
                     (msvcrt_iat_rva as i32 + 8) - (target_rva as i32)
                 } else {
                     continue;

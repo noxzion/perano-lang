@@ -212,10 +212,8 @@ impl Parser {
             Token::Return => self.parse_return(),
             Token::Asm => self.parse_asm(),
             Token::Star => {
-                // Check if this is a pointer assignment (*ptr = value)
                 let next_pos = self.position + 1;
                 let mut check_pos = next_pos;
-                // Skip identifier tokens to find assignment
                 while check_pos < self.tokens.len() {
                     match &self.tokens[check_pos] {
                         Token::Assign => {
@@ -324,7 +322,6 @@ impl Parser {
     }
 
     fn parse_pointer_assignment(&mut self) -> crate::error::Result<Statement> {
-        // Parse *ptr = value
         self.expect(Token::Star)?;
         let target = self.parse_primary();
         self.expect(Token::Assign)?;
@@ -433,11 +430,16 @@ impl Parser {
             
             use crate::ast::AsmPart;
             let mut parts = Vec::new();
+            let mut current_line = String::new();
             
             while !matches!(self.current_token(), Token::RightBrace) {
                 match self.current_token() {
                     Token::Dollar => {
-                        // Handle $(varname)
+                        if !current_line.is_empty() {
+                            parts.push(AsmPart::Literal(current_line.trim().to_string()));
+                            current_line.clear();
+                        }
+                        
                         self.advance();
                         if matches!(self.current_token(), Token::LeftParen) {
                             self.advance();
@@ -449,15 +451,59 @@ impl Parser {
                         }
                     }
                     Token::Identifier(instr) => {
-                        let instr_name = instr.clone();
-                        parts.push(AsmPart::Literal(instr_name));
+                        if instr == ";" || instr.starts_with(';') {
+                            while !matches!(self.current_token(), Token::Newline | Token::RightBrace | Token::Eof) {
+                                self.advance();
+                            }
+                        } else {
+                            if !current_line.is_empty() {
+                                current_line.push(' ');
+                            }
+                            current_line.push_str(instr);
+                        }
                         self.advance();
                     }
                     Token::Number(n) => {
-                        parts.push(AsmPart::Literal(format!(" {}", n)));
-                        self.advance();
+                        if !current_line.is_empty() {
+                            current_line.push(' ');
+                        }
+                        let n_val = *n;
+                        let num_str = if n_val == 0 {
+                            let next_pos = self.position + 1;
+                            if next_pos < self.tokens.len() {
+                                if let Token::Identifier(id) = &self.tokens[next_pos] {
+                                    if id.starts_with('x') || id.starts_with('X') {
+                                        let hex_str = format!("0{}", id);
+                                        self.advance();
+                                        self.advance();
+                                        hex_str
+                                    } else {
+                                        n_val.to_string()
+                                    }
+                                } else {
+                                    n_val.to_string()
+                                }
+                            } else {
+                                n_val.to_string()
+                            }
+                        } else {
+                            n_val.to_string()
+                        };
+                        current_line.push_str(&num_str);
+                        if !num_str.starts_with("0x") && !num_str.starts_with("0X") {
+                            self.advance();
+                        }
+                    }
+                    Token::Semicolon => {
+                        while !matches!(self.current_token(), Token::Newline | Token::RightBrace | Token::Eof) {
+                            self.advance();
+                        }
                     }
                     Token::Newline => {
+                        if !current_line.is_empty() {
+                            parts.push(AsmPart::Literal(current_line.clone()));
+                            current_line.clear();
+                        }
                         parts.push(AsmPart::Literal("\n".to_string()));
                         self.advance();
                     }
@@ -465,6 +511,10 @@ impl Parser {
                         self.advance();
                     }
                 }
+            }
+            
+            if !current_line.is_empty() {
+                parts.push(AsmPart::Literal(current_line));
             }
             
             self.expect(Token::RightBrace)?;
@@ -483,15 +533,13 @@ impl Parser {
         
         while let Some(ch) = chars.next() {
             if ch == '$' && chars.peek() == Some(&'(') {
-                chars.next(); // consume '('
+                chars.next();
                 
-                // Save current literal if any
                 if !current_literal.is_empty() {
                     parts.push(AsmPart::Literal(current_literal.clone()));
                     current_literal.clear();
                 }
                 
-                // Extract variable name
                 let mut var_name = String::new();
                 while let Some(ch) = chars.next() {
                     if ch == ')' {
@@ -506,7 +554,6 @@ impl Parser {
             }
         }
         
-        // Add remaining literal if any
         if !current_literal.is_empty() {
             parts.push(AsmPart::Literal(current_literal));
         }
@@ -687,16 +734,13 @@ impl Parser {
         
         while let Some(ch) = chars.next() {
             if ch == '$' && chars.peek() == Some(&'(') {
-                // Found interpolation start
-                chars.next(); // consume '('
+                chars.next();
                 
-                // Save current literal if any
                 if !current_literal.is_empty() {
                     parts.push(TemplateStringPart::Literal(current_literal.clone()));
                     current_literal.clear();
                 }
                 
-                // Extract expression string
                 let mut expr_str = String::new();
                 let mut paren_depth = 1;
                 
@@ -715,10 +759,8 @@ impl Parser {
                     }
                 }
                 
-                // Parse format specifier if present (e.g., "value:08x")
                 let (expr_str, format_spec) = self.parse_format_spec(&expr_str);
                 
-                // Parse the expression
                 let mut lexer = crate::lexer::Lexer::new(&expr_str);
                 let tokens = lexer.tokenize();
                 let mut parser = Parser::new(tokens, &self.file);
@@ -733,7 +775,6 @@ impl Parser {
             }
         }
         
-        // Add remaining literal if any
         if !current_literal.is_empty() {
             parts.push(TemplateStringPart::Literal(current_literal));
         }
@@ -744,7 +785,6 @@ impl Parser {
     fn parse_format_spec(&self, expr_str: &str) -> (String, Option<crate::ast::FormatSpec>) {
         use crate::ast::{FormatSpec, FormatType};
         
-        // Look for format specifier after colon, e.g., "x:08d" or "x:x"
         if let Some(colon_pos) = expr_str.rfind(':') {
             let expr_part = expr_str[..colon_pos].trim();
             let format_part = expr_str[colon_pos + 1..].trim();
@@ -756,13 +796,11 @@ impl Parser {
                 
                 let mut format_chars = format_part.chars().peekable();
                 
-                // Check for zero padding
                 if format_chars.peek() == Some(&'0') {
                     padding = '0';
                     format_chars.next();
                 }
                 
-                // Parse width
                 let mut width_str = String::new();
                 while let Some(&ch) = format_chars.peek() {
                     if ch.is_ascii_digit() {
@@ -777,7 +815,6 @@ impl Parser {
                     width = width_str.parse().ok();
                 }
                 
-                // Parse format type
                 if let Some(ch) = format_chars.next() {
                     format_type = match ch {
                         'd' => FormatType::Decimal,
@@ -822,7 +859,6 @@ impl Parser {
                     };
                 }
 
-                // Check if string contains interpolation syntax $(...)
                 if s.contains("$(") {
                     self.parse_template_string(s)
                 } else {
@@ -880,7 +916,6 @@ impl Parser {
                         panic!("Expected closing parenthesis in function call");
                     }
 
-                    // Special handling for eval() function
                     if name == "eval" && args.len() == 1 {
                         return Expression::Eval {
                             instruction: Box::new(args[0].clone()),

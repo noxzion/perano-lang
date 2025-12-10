@@ -128,16 +128,13 @@ impl<'a> CodeGen<'a> {
                 }
             }
             Statement::PointerAssignment { target, value } => {
-                // Generate value first
                 self.generate_expression(value);
-                self.emit(&[0x50]); // push rax (save value)
+                self.emit(&[0x50]);
                 
-                // Generate target address
                 self.generate_expression(target);
                 
-                // Pop value and store through pointer
-                self.emit(&[0x59]); // pop rcx (restore value)
-                self.emit(&[0x48, 0x89, 0x08]); // mov [rax], rcx
+                self.emit(&[0x59]);
+                self.emit(&[0x48, 0x89, 0x08]);
             }
             Statement::Return(expr) => {
                 if let Some(e) = expr {
@@ -161,7 +158,6 @@ impl<'a> CodeGen<'a> {
                 self.generate_expression(expr);
             }
             Statement::InlineAsm { .. } => {
-                // Inline assembly not supported for PE/ELF targets
             }
             Statement::If { condition, then_body, else_body } => {
                 self.generate_expression(condition);
@@ -391,24 +387,20 @@ impl<'a> CodeGen<'a> {
                 self.emit(&[0x48, 0x8B, 0x00]);
             }
             Expression::Eval { instruction: _ } => {
-                // eval() is not supported for PE/x64 target
-                // Just push 0
-                self.emit(&[0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]); // mov rax, 0
+                self.emit(&[0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]);
             }
             Expression::String(s) => {
-                // Check if contains interpolation
                 if s.contains("$(") {
                     self.generate_string_interpolation(s);
                 } else {
-                    // Regular string
-                    self.emit(&[0xEB]); // jmp
+                    self.emit(&[0xEB]);
                     self.emit(&[(s.len() + 1) as u8]);
                     let addr = self.code.len();
                     self.code.extend_from_slice(s.as_bytes());
                     self.code.push(0);
                     let lea_pos = self.code.len() + 7;
                     let offset = (addr as i32) - (lea_pos as i32);
-                    self.emit(&[0x48, 0x8D, 0x05]); // lea rax, [rip+offset]
+                    self.emit(&[0x48, 0x8D, 0x05]);
                     self.emit_i32(offset);
                 }
             }
@@ -417,30 +409,24 @@ impl<'a> CodeGen<'a> {
     }
     
     fn generate_string_interpolation(&mut self, s: &str) {
-        // Allocate buffer in .data if not yet done
         if self.data.is_empty() {
             self.data.extend_from_slice(&[0u8; 2048]);
         }
         
-        // Load .data buffer address
-        self.emit(&[0x48, 0x8D, 0x1D]); // lea rbx, [rip+offset]
-        self.emit_i32(0x40000000u32 as i32); // Placeholder
+        self.emit(&[0x48, 0x8D, 0x1D]);
+        self.emit_i32(0x40000000u32 as i32);
         
-        // r12 = write position
-        self.emit(&[0x49, 0x89, 0xDC]); // mov r12, rbx
+        self.emit(&[0x49, 0x89, 0xDC]);
         
-        // Parse string and generate code
         let mut pos = 0;
         while pos < s.len() {
             if let Some(start) = s[pos..].find("$(") {
-                // Copy literal before $(
                 if start > 0 {
                     let literal = &s[pos..pos+start];
                     self.copy_literal_to_buffer(literal);
                 }
                 pos += start + 2;
                 
-                // Find closing )
                 if let Some(end) = s[pos..].find(')') {
                     let var_name = &s[pos..pos+end];
                     self.copy_variable_to_buffer(var_name);
@@ -449,90 +435,79 @@ impl<'a> CodeGen<'a> {
                     break;
                 }
             } else {
-                // Rest is literal
                 let literal = &s[pos..];
                 self.copy_literal_to_buffer(literal);
                 break;
             }
         }
         
-        // Null terminate
-        self.emit(&[0x41, 0xC6, 0x04, 0x24, 0x00]); // mov byte [r12], 0
+        self.emit(&[0x41, 0xC6, 0x04, 0x24, 0x00]);
         
-        // Return buffer in rax
-        self.emit(&[0x48, 0x89, 0xD8]); // mov rax, rbx
+        self.emit(&[0x48, 0x89, 0xD8]);
     }
     
     fn copy_literal_to_buffer(&mut self, lit: &str) {
-        // Embed literal
         self.emit(&[0xEB, (lit.len() + 1) as u8]);
         let addr = self.code.len();
         self.code.extend_from_slice(lit.as_bytes());
         self.code.push(0);
         
-        // Load address
         let lea_pos = self.code.len() + 7;
         let offset = (addr as i32) - (lea_pos as i32);
-        self.emit(&[0x48, 0x8D, 0x35]); // lea rsi, [rip+offset]
+        self.emit(&[0x48, 0x8D, 0x35]);
         self.emit_i32(offset);
         
-        // Copy loop
         let loop_start = self.code.len();
-        self.emit(&[0x48, 0x8A, 0x06]); // mov al, [rsi]
-        self.emit(&[0x48, 0x84, 0xC0]); // test al, al
-        self.emit(&[0x74, 0x0A]); // jz done
-        self.emit(&[0x41, 0x88, 0x04, 0x24]); // mov [r12], al
-        self.emit(&[0x49, 0xFF, 0xC4]); // inc r12
-        self.emit(&[0x48, 0xFF, 0xC6]); // inc rsi
+        self.emit(&[0x48, 0x8A, 0x06]);
+        self.emit(&[0x48, 0x84, 0xC0]);
+        self.emit(&[0x74, 0x0A]);
+        self.emit(&[0x41, 0x88, 0x04, 0x24]);
+        self.emit(&[0x49, 0xFF, 0xC4]);
+        self.emit(&[0x48, 0xFF, 0xC6]);
         let back = (loop_start as i32) - (self.code.len() as i32) - 2;
-        self.emit(&[0xEB, (back as u8)]); // jmp loop
+        self.emit(&[0xEB, (back as u8)]);
     }
     
     fn copy_variable_to_buffer(&mut self, var_name: &str) {
-        // Load variable value
         if let Some(&offset) = self.variables.get(var_name) {
-            self.emit(&[0x48, 0x8B, 0x85]); // mov rax, [rbp+offset]
+            self.emit(&[0x48, 0x8B, 0x85]);
             self.emit_i32(offset);
             
-            // Convert number to string (simple itoa)
-            self.emit(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
-            self.emit(&[0x48, 0x8D, 0x7C, 0x24, 0x1E]); // lea rdi, [rsp+30]
+            self.emit(&[0x48, 0x83, 0xEC, 0x20]);
+            self.emit(&[0x48, 0x8D, 0x7C, 0x24, 0x1E]);
             
-            // Handle negative
-            self.emit(&[0x48, 0x85, 0xC0]); // test rax, rax
-            self.emit(&[0x79, 0x09]); // jns positive
-            self.emit(&[0x48, 0xF7, 0xD8]); // neg rax
-            self.emit(&[0x41, 0xC6, 0x04, 0x24, 0x2D]); // mov byte [r12], '-'
-            self.emit(&[0x49, 0xFF, 0xC4]); // inc r12
+            self.emit(&[0x48, 0x85, 0xC0]);
+            self.emit(&[0x79, 0x09]);
+            self.emit(&[0x48, 0xF7, 0xD8]);
+            self.emit(&[0x41, 0xC6, 0x04, 0x24, 0x2D]);
+            self.emit(&[0x49, 0xFF, 0xC4]);
             
-            // Convert digits
-            self.emit(&[0x48, 0x89, 0xC3]); // mov rbx, rax
+            self.emit(&[0x48, 0x89, 0xC3]);
             let digit_loop = self.code.len();
-            self.emit(&[0x48, 0x89, 0xD8]); // mov rax, rbx
-            self.emit(&[0x48, 0x31, 0xD2]); // xor rdx, rdx
-            self.emit(&[0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00]); // mov rcx, 10
-            self.emit(&[0x48, 0xF7, 0xF1]); // div rcx
-            self.emit(&[0x80, 0xC2, 0x30]); // add dl, '0'
-            self.emit(&[0x88, 0x17]); // mov [rdi], dl
-            self.emit(&[0x48, 0xFF, 0xCF]); // dec rdi
-            self.emit(&[0x48, 0x89, 0xC3]); // mov rbx, rax
-            self.emit(&[0x48, 0x85, 0xC0]); // test rax, rax
+            self.emit(&[0x48, 0x89, 0xD8]);
+            self.emit(&[0x48, 0x31, 0xD2]);
+            self.emit(&[0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00]);
+            self.emit(&[0x48, 0xF7, 0xF1]);
+            self.emit(&[0x80, 0xC2, 0x30]);
+            self.emit(&[0x88, 0x17]);
+            self.emit(&[0x48, 0xFF, 0xCF]);
+            self.emit(&[0x48, 0x89, 0xC3]);
+            self.emit(&[0x48, 0x85, 0xC0]);
             let back = (digit_loop as i32) - (self.code.len() as i32) - 2;
-            self.emit(&[0x75, ((-back) as u8)]); // jnz loop
+            self.emit(&[0x75, ((-back) as u8)]);
             
-            // Copy to buffer
-            self.emit(&[0x48, 0xFF, 0xC7]); // inc rdi
+            self.emit(&[0x48, 0xFF, 0xC7]);
             let copy_loop = self.code.len();
-            self.emit(&[0x48, 0x8A, 0x07]); // mov al, [rdi]
-            self.emit(&[0x48, 0x84, 0xC0]); // test al, al
-            self.emit(&[0x74, 0x0A]); // jz done
-            self.emit(&[0x41, 0x88, 0x04, 0x24]); // mov [r12], al
-            self.emit(&[0x49, 0xFF, 0xC4]); // inc r12
-            self.emit(&[0x48, 0xFF, 0xC7]); // inc rdi
+            self.emit(&[0x48, 0x8A, 0x07]);
+            self.emit(&[0x48, 0x84, 0xC0]);
+            self.emit(&[0x74, 0x0A]);
+            self.emit(&[0x41, 0x88, 0x04, 0x24]);
+            self.emit(&[0x49, 0xFF, 0xC4]);
+            self.emit(&[0x48, 0xFF, 0xC7]);
             let back2 = (copy_loop as i32) - (self.code.len() as i32) - 2;
-            self.emit(&[0xEB, (back2 as u8)]); // jmp loop
+            self.emit(&[0xEB, (back2 as u8)]);
             
-            self.emit(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+            self.emit(&[0x48, 0x83, 0xC4, 0x20]);
         }
     }
 
@@ -979,7 +954,6 @@ impl<'a> CodeGen<'a> {
 
     fn emit_print_char(&mut self) {
         if self.target == "elf" {
-            // Linux: write(1, &char, 1)
             self.emit(&[0x48, 0x83, 0xEC, 0x10]);
             self.emit(&[0x88, 0x04, 0x24]);
             self.emit(&[0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
@@ -991,7 +965,7 @@ impl<'a> CodeGen<'a> {
         } else {
             
             self.emit(&[0x48, 0x83, 0xEC, 0x48]);
-            self.emit(&[0x88, 0x44, 0x24, 0x30]); // store char on stack
+            self.emit(&[0x88, 0x44, 0x24, 0x30]);
 
             
             self.emit(&[0xB9, 0xF5, 0xFF, 0xFF, 0xFF]);
@@ -1012,81 +986,24 @@ impl<'a> CodeGen<'a> {
     }
 
     fn emit_read_int(&mut self) {
-        // Read integer from stdin, return in RAX
         if self.target == "elf" {
-            // Use scanf-like approach with read syscall
             self.emit(&[0x48, 0x83, 0xEC, 0x20]);
             
-            // Read up to 20 bytes from stdin
-            self.emit(&[0x48, 0x31, 0xC0]); // mov rax, 0 (read)
-            self.emit(&[0x48, 0x31, 0xFF]); // mov rdi, 0 (stdin)
-            self.emit(&[0x48, 0x89, 0xE6]); // mov rsi, rsp
-            self.emit(&[0x48, 0xC7, 0xC2, 0x14, 0x00, 0x00, 0x00]); // mov rdx, 20
-            self.emit(&[0x0F, 0x05]); // syscall
+            self.emit(&[0x48, 0x31, 0xC0]);
+            self.emit(&[0x48, 0x31, 0xFF]);
+            self.emit(&[0x48, 0x89, 0xE6]);
+            self.emit(&[0x48, 0xC7, 0xC2, 0x14, 0x00, 0x00, 0x00]);
+            self.emit(&[0x0F, 0x05]);
 
-            // Parse integer from buffer
-            self.emit(&[0x48, 0x31, 0xC0]); // result = 0
-            self.emit(&[0x48, 0x31, 0xC9]); // sign = 0
-            self.emit(&[0x48, 0x89, 0xE6]); // ptr = rsp
+            self.emit(&[0x48, 0x31, 0xC0]);
+            self.emit(&[0x48, 0x31, 0xC9]);
+            self.emit(&[0x48, 0x89, 0xE6]);
 
-            // Check for minus sign
-            self.emit(&[0x80, 0x3E, 0x2D]); // cmp byte [rsi], '-'
-            self.emit(&[0x75, 0x07]); // jne skip_sign
-            self.emit(&[0x48, 0xFF, 0xC1]); // inc rcx (sign = 1)
-            self.emit(&[0x48, 0xFF, 0xC6]); // inc rsi (skip '-')
-
-            // Parse loop
-            let loop_start = self.code.len();
-            self.emit(&[0x0F, 0xB6, 0x1E]); // movzx ebx, byte [rsi]
-            self.emit(&[0x80, 0xFB, 0x30]); // cmp bl, '0'
-            self.emit(&[0x72, 0x13]); // jb done
-            self.emit(&[0x80, 0xFB, 0x39]); // cmp bl, '9'
-            self.emit(&[0x77, 0x0F]); // ja done
-            
-            self.emit(&[0x48, 0x6B, 0xC0, 0x0A]); // imul rax, 10
-            self.emit(&[0x80, 0xEB, 0x30]); // sub bl, '0'
-            self.emit(&[0x48, 0x0F, 0xB6, 0xDB]); // movzx rbx, bl
-            self.emit(&[0x48, 0x01, 0xD8]); // add rax, rbx
-            self.emit(&[0x48, 0xFF, 0xC6]); // inc rsi
-            let back = (loop_start as i32) - (self.code.len() as i32) - 2;
-            self.emit(&[0xEB, (back as u8)]); // jmp loop_start
-
-            // Apply sign
-            self.emit(&[0x48, 0x85, 0xC9]); // test rcx, rcx
-            self.emit(&[0x74, 0x03]); // jz skip_neg
-            self.emit(&[0x48, 0xF7, 0xD8]); // neg rax
-
-            self.emit(&[0x48, 0x83, 0xC4, 0x20]);
-        } else {
-            // Windows: use scanf simulation
-            self.emit(&[0x48, 0x83, 0xEC, 0x48]);
-
-            // GetStdHandle(-10) for stdin
-            self.emit(&[0xB9, 0xF6, 0xFF, 0xFF, 0xFF]);
-            self.emit(&[0xFF, 0x15]);
-            self.emit_i32(0x20000000u32 as i32);
-
-            // ReadFile(handle, buffer, 20, &read, NULL)
-            self.emit(&[0x48, 0x89, 0xC1]); // handle
-            self.emit(&[0x48, 0x8D, 0x54, 0x24, 0x30]); // buffer
-            self.emit(&[0x41, 0xB8, 0x14, 0x00, 0x00, 0x00]); // 20 bytes
-            self.emit(&[0x4C, 0x8D, 0x4C, 0x24, 0x28]); // &bytes_read
-            self.emit(&[0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00]);
-            self.emit(&[0xFF, 0x15]);
-            self.emit_i32(0x20100000u32 as i32);
-
-            // Parse integer
-            self.emit(&[0x48, 0x31, 0xC0]); // result = 0
-            self.emit(&[0x48, 0x31, 0xC9]); // sign = 0
-            self.emit(&[0x48, 0x8D, 0x74, 0x24, 0x30]); // ptr
-
-            // Check for minus
             self.emit(&[0x80, 0x3E, 0x2D]);
             self.emit(&[0x75, 0x07]);
             self.emit(&[0x48, 0xFF, 0xC1]);
             self.emit(&[0x48, 0xFF, 0xC6]);
 
-            // Parse loop
             let loop_start = self.code.len();
             self.emit(&[0x0F, 0xB6, 0x1E]);
             self.emit(&[0x80, 0xFB, 0x30]);
@@ -1102,7 +1019,50 @@ impl<'a> CodeGen<'a> {
             let back = (loop_start as i32) - (self.code.len() as i32) - 2;
             self.emit(&[0xEB, (back as u8)]);
 
-            // Apply sign
+            self.emit(&[0x48, 0x85, 0xC9]);
+            self.emit(&[0x74, 0x03]);
+            self.emit(&[0x48, 0xF7, 0xD8]);
+
+            self.emit(&[0x48, 0x83, 0xC4, 0x20]);
+        } else {
+            self.emit(&[0x48, 0x83, 0xEC, 0x48]);
+
+            self.emit(&[0xB9, 0xF6, 0xFF, 0xFF, 0xFF]);
+            self.emit(&[0xFF, 0x15]);
+            self.emit_i32(0x20000000u32 as i32);
+
+            self.emit(&[0x48, 0x89, 0xC1]);
+            self.emit(&[0x48, 0x8D, 0x54, 0x24, 0x30]);
+            self.emit(&[0x41, 0xB8, 0x14, 0x00, 0x00, 0x00]);
+            self.emit(&[0x4C, 0x8D, 0x4C, 0x24, 0x28]);
+            self.emit(&[0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00]);
+            self.emit(&[0xFF, 0x15]);
+            self.emit_i32(0x20100000u32 as i32);
+
+            self.emit(&[0x48, 0x31, 0xC0]);
+            self.emit(&[0x48, 0x31, 0xC9]);
+            self.emit(&[0x48, 0x8D, 0x74, 0x24, 0x30]);
+
+            self.emit(&[0x80, 0x3E, 0x2D]);
+            self.emit(&[0x75, 0x07]);
+            self.emit(&[0x48, 0xFF, 0xC1]);
+            self.emit(&[0x48, 0xFF, 0xC6]);
+
+            let loop_start = self.code.len();
+            self.emit(&[0x0F, 0xB6, 0x1E]);
+            self.emit(&[0x80, 0xFB, 0x30]);
+            self.emit(&[0x72, 0x13]);
+            self.emit(&[0x80, 0xFB, 0x39]);
+            self.emit(&[0x77, 0x0F]);
+            
+            self.emit(&[0x48, 0x6B, 0xC0, 0x0A]);
+            self.emit(&[0x80, 0xEB, 0x30]);
+            self.emit(&[0x48, 0x0F, 0xB6, 0xDB]);
+            self.emit(&[0x48, 0x01, 0xD8]);
+            self.emit(&[0x48, 0xFF, 0xC6]);
+            let back = (loop_start as i32) - (self.code.len() as i32) - 2;
+            self.emit(&[0xEB, (back as u8)]);
+
             self.emit(&[0x48, 0x85, 0xC9]);
             self.emit(&[0x74, 0x03]);
             self.emit(&[0x48, 0xF7, 0xD8]);
@@ -1112,27 +1072,24 @@ impl<'a> CodeGen<'a> {
     }
 
     fn emit_read_char(&mut self) {
-        // Read single character from stdin, return in RAX
         if self.target == "elf" {
             self.emit(&[0x48, 0x83, 0xEC, 0x10]);
             
-            self.emit(&[0x48, 0x31, 0xC0]); // mov rax, 0 (read)
-            self.emit(&[0x48, 0x31, 0xFF]); // mov rdi, 0 (stdin)
-            self.emit(&[0x48, 0x89, 0xE6]); // mov rsi, rsp
-            self.emit(&[0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]); // mov rdx, 1
-            self.emit(&[0x0F, 0x05]); // syscall
+            self.emit(&[0x48, 0x31, 0xC0]);
+            self.emit(&[0x48, 0x31, 0xFF]);
+            self.emit(&[0x48, 0x89, 0xE6]);
+            self.emit(&[0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
+            self.emit(&[0x0F, 0x05]);
 
-            self.emit(&[0x48, 0x0F, 0xB6, 0x04, 0x24]); // movzx rax, byte [rsp]
+            self.emit(&[0x48, 0x0F, 0xB6, 0x04, 0x24]);
             self.emit(&[0x48, 0x83, 0xC4, 0x10]);
         } else {
             self.emit(&[0x48, 0x83, 0xEC, 0x48]);
 
-            // GetStdHandle(-10) for stdin
             self.emit(&[0xB9, 0xF6, 0xFF, 0xFF, 0xFF]);
             self.emit(&[0xFF, 0x15]);
             self.emit_i32(0x20000000u32 as i32);
 
-            // ReadFile(handle, &char, 1, &read, NULL)
             self.emit(&[0x48, 0x89, 0xC1]);
             self.emit(&[0x48, 0x8D, 0x54, 0x24, 0x30]);
             self.emit(&[0x41, 0xB8, 0x01, 0x00, 0x00, 0x00]);
@@ -1141,28 +1098,23 @@ impl<'a> CodeGen<'a> {
             self.emit(&[0xFF, 0x15]);
             self.emit_i32(0x20100000u32 as i32);
 
-            self.emit(&[0x48, 0x0F, 0xB6, 0x44, 0x24, 0x30]); // movzx rax, byte [rsp+0x30]
+            self.emit(&[0x48, 0x0F, 0xB6, 0x44, 0x24, 0x30]);
             self.emit(&[0x48, 0x83, 0xC4, 0x48]);
         }
     }
 
     fn emit_flush(&mut self) {
-        // Flush stdout
         if self.target == "elf" {
-            // Linux: fsync(1)
-            self.emit(&[0x48, 0xC7, 0xC0, 0x4A, 0x00, 0x00, 0x00]); // mov rax, 74 (fsync)
-            self.emit(&[0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00]); // mov rdi, 1 (stdout)
-            self.emit(&[0x0F, 0x05]); // syscall
+            self.emit(&[0x48, 0xC7, 0xC0, 0x4A, 0x00, 0x00, 0x00]);
+            self.emit(&[0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00]);
+            self.emit(&[0x0F, 0x05]);
         } else {
-            // Windows: FlushFileBuffers
             self.emit(&[0x48, 0x83, 0xEC, 0x28]);
 
-            // GetStdHandle(-11) for stdout
             self.emit(&[0xB9, 0xF5, 0xFF, 0xFF, 0xFF]);
             self.emit(&[0xFF, 0x15]);
             self.emit_i32(0x20000000u32 as i32);
 
-            // FlushFileBuffers(handle)
             self.emit(&[0x48, 0x89, 0xC1]);
             self.emit(&[0xFF, 0x15]);
             self.emit_i32(0x20180000u32 as i32);

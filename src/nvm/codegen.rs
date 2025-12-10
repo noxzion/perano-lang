@@ -29,6 +29,7 @@ const STORE_ABS: u8 = 0x45;
 const SYSCALL: u8 = 0x50;
 
 const SYSCALL_EXIT: u8 = 0x00;
+const SYSCALL_PRINT: u8 = 0x0D;
 const SYSCALL_EXEC: u8 = 0x01;
 const SYSCALL_READ: u8 = 0x02;
 const SYSCALL_WRITE: u8 = 0x03;
@@ -40,7 +41,6 @@ const SYSCALL_MSG_SEND: u8 = 0x09;
 const SYSCALL_MSG_RECEIVE: u8 = 0x0A;
 const SYSCALL_PORT_IN_BYTE: u8 = 0x0B;
 const SYSCALL_PORT_OUT_BYTE: u8 = 0x0C;
-const SYSCALL_PRINT: u8 = 0x0D;
 const SYSCALL_GET_LOCAL_ADDR: u8 = 0x0F;
 
 pub struct NVMCodeGen {
@@ -51,7 +51,9 @@ pub struct NVMCodeGen {
     next_local: u8,
     loop_stack: Vec<(String, String)>,
     current_function: String,
-    string_literals: Vec<(String, String)>, // (label, string_content)
+    string_literals: Vec<(String, String)>,
+    compile_time_strings: HashMap<String, String>,
+    vga_cursor: u32,
 }
 
 impl NVMCodeGen {
@@ -65,7 +67,43 @@ impl NVMCodeGen {
             loop_stack: Vec::new(),
             current_function: String::new(),
             string_literals: Vec::new(),
+            compile_time_strings: HashMap::new(),
+            vga_cursor: 0xB8000 + (18 * 160),
         }
+    }
+    
+    fn has_return_or_exit(&self, stmts: &[Statement]) -> bool {
+        for stmt in stmts {
+            match stmt {
+                Statement::Return(_) => return true,
+                Statement::InlineAsm { parts } => {
+                    for part in parts {
+                        if let crate::ast::AsmPart::Literal(s) = part {
+                            if s.contains("syscall") && s.contains("exit") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                Statement::If { then_body, else_body, .. } => {
+                    if self.has_return_or_exit(then_body) {
+                        return true;
+                    }
+                    if let Some(else_stmts) = else_body {
+                        if self.has_return_or_exit(else_stmts) {
+                            return true;
+                        }
+                    }
+                }
+                Statement::For { body, .. } => {
+                    if self.has_return_or_exit(body) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     pub fn generate(&mut self, program: &Program) -> Vec<u8> {
@@ -94,7 +132,7 @@ impl NVMCodeGen {
         }
 
         if program.modules.contains_key("stdio") {
-            self.generate_print_int_helper();
+            self.generate_print_int_vga_helper();
         }
 
         self.emit_string_literals();
@@ -106,6 +144,7 @@ impl NVMCodeGen {
     fn generate_function(&mut self, func: &Function, program: &Program) {
         self.current_function = func.name.clone();
         self.local_vars.clear();
+        self.compile_time_strings.clear();
         self.next_local = 0;
 
         let func_label = format!("func_{}", func.name);
@@ -120,7 +159,7 @@ impl NVMCodeGen {
             self.generate_statement(stmt, program);
         }
 
-        if func.name == "main" {
+        if func.name == "main" && !self.has_return_or_exit(&func.body) {
             self.emit_push32(0);
             self.emit_byte(SYSCALL);
             self.emit_byte(SYSCALL_EXIT);
@@ -153,6 +192,9 @@ impl NVMCodeGen {
         match stmt {
             Statement::VarDecl { name, var_type: _, value } => {
                 if let Some(init_expr) = value {
+                    if let Expression::String(s) = init_expr {
+                        self.compile_time_strings.insert(name.clone(), s.clone());
+                    }
                     self.generate_expression(init_expr, program);
                 } else {
                     self.emit_push32(0);
@@ -260,26 +302,36 @@ impl NVMCodeGen {
             Statement::InlineAsm { parts } => {
                 use crate::ast::AsmPart;
                 
+                let mut asm_text = String::new();
                 for part in parts {
                     match part {
                         AsmPart::Literal(s) => {
-                            for line in s.lines() {
-                                let line = line.trim();
-                                if !line.is_empty() && !line.starts_with(';') {
-                                    self.emit_asm_instruction(line);
-                                }
-                            }
+                            asm_text.push_str(s);
                         }
                         AsmPart::Variable(var_name) => {
-                            if let Some(&local_index) = self.local_vars.get(var_name) {
-                                self.emit_byte(LOAD);
-                                self.emit_byte(local_index);
-                                self.emit_byte(SYSCALL);
-                                self.emit_byte(0x0E);
+                            if let Some(string_value) = self.compile_time_strings.get(var_name) {
+                                asm_text.push_str(string_value);
+                                asm_text.push('\n');
                             } else {
-                                eprintln!("Warning: Variable '{}' not found in asm block", var_name);
+                                eprintln!("Warning: Variable interpolation $({}) requires compile-time string constant", var_name);
+                                eprintln!("Hint: The variable must be initialized with a string literal like: var {} = \"push 42\"", var_name);
                             }
                         }
+                    }
+                }
+                
+                for line in asm_text.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with(';') {
+                        continue;
+                    }
+                    let code = if let Some(comment_pos) = line.find(';') {
+                        line[..comment_pos].trim()
+                    } else {
+                        line
+                    };
+                    if !code.is_empty() {
+                        self.emit_asm_instruction(code);
                     }
                 }
             }
@@ -396,26 +448,6 @@ impl NVMCodeGen {
             Expression::ModuleCall { module, function, args } => {
                 if module == "stdio" {
                     match function.as_str() {
-                        "PrintStr" | "PrintlnStr" => {
-                            if !args.is_empty() {
-                                if let Expression::String(s) = &args[0] {
-                                    for ch in s.as_bytes() {
-                                        self.emit_push32(*ch as i32);
-                                        self.emit_byte(SYSCALL);
-                                        self.emit_byte(SYSCALL_PRINT);
-                                    }
-                                    
-                                    if function == "PrintlnStr" {
-                                        self.emit_push32('\n' as i32);
-                                        self.emit_byte(SYSCALL);
-                                        self.emit_byte(SYSCALL_PRINT);
-                                    }
-                                    
-                                    self.emit_push32(0);
-                                    return;
-                                }
-                            }
-                        }
                         "Print" => {
                             if !args.is_empty() {
                                 if let Expression::String(s) = &args[0] {
@@ -464,15 +496,6 @@ impl NVMCodeGen {
                                     self.emit_push32(0);
                                     return;
                                 }
-                            }
-                        }
-                        "PrintChar" => {
-                            if !args.is_empty() {
-                                self.generate_expression(&args[0], program);
-                                self.emit_byte(SYSCALL);
-                                self.emit_byte(SYSCALL_PRINT);
-                                self.emit_push32(0);
-                                return;
                             }
                         }
                         _ => {}
@@ -652,8 +675,28 @@ impl NVMCodeGen {
         let bytes = value.to_be_bytes();
         self.bytecode.extend_from_slice(&bytes);
     }
+    
+    fn emit_vga_char(&mut self, ch: u8, attr: u8) {
+        self.emit_push32(self.vga_cursor as i32);
+        self.emit_push32(((attr as u32) << 8 | ch as u32) as i32);
+        self.emit_byte(STORE_ABS);
+        self.vga_cursor += 2;
+    }
+    
+    fn vga_newline(&mut self) {
+        self.vga_cursor = ((self.vga_cursor - 0xB8000) / 160 + 1) * 160 + 0xB8000;
+        self.vga_cursor += 160;
+        if self.vga_cursor >= 0xB8FA0 {
+            self.vga_cursor = 0xB8000 + (18 * 160);
+        }
+    }
 
     fn emit_asm_instruction(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.is_empty() {
             return;
@@ -677,9 +720,35 @@ impl NVMCodeGen {
             "syscall" => {
                 self.emit_byte(SYSCALL);
                 if parts.len() > 1 {
-                    if let Ok(value) = parts[1].parse::<u8>() {
+                    let syscall_arg = parts[1];
+                    if let Ok(value) = syscall_arg.parse::<u8>() {
                         self.emit_byte(value);
+                    } else {
+                        let syscall_num = match syscall_arg.to_lowercase().as_str() {
+                            "exit" => SYSCALL_EXIT,
+                            "exec" => SYSCALL_EXEC,
+                            "read" => SYSCALL_READ,
+                            "write" => SYSCALL_WRITE,
+                            "create" => SYSCALL_CREATE,
+                            "delete" => SYSCALL_DELETE,
+                            "cap_check" => SYSCALL_CAP_CHECK,
+                            "cap_spawn" => SYSCALL_CAP_SPAWN,
+                            "msg_send" => SYSCALL_MSG_SEND,
+                            "msg_receive" | "msg_recv" => SYSCALL_MSG_RECEIVE,
+                            "inb" | "port_in_byte" => SYSCALL_PORT_IN_BYTE,
+                            "outb" | "port_out_byte" => SYSCALL_PORT_OUT_BYTE,
+                            
+                            "get_local_addr" => SYSCALL_GET_LOCAL_ADDR,
+                            _ => {
+                                eprintln!("Warning: Unknown syscall name '{}', defaulting to 0", syscall_arg);
+                                0
+                            }
+                        };
+                        self.emit_byte(syscall_num);
                     }
+                } else {
+                    eprintln!("Warning: syscall instruction without argument, defaulting to 0");
+                    self.emit_byte(0);
                 }
             }
             "ret" => self.emit_byte(RET),
@@ -728,18 +797,15 @@ impl NVMCodeGen {
         }
     }
 
-    fn generate_print_int_helper(&mut self) {
+    fn generate_print_int_vga_helper(&mut self) {
         self.add_label("__print_int");
         
-        // Save return address to local 255
         self.emit_byte(STORE);
         self.emit_byte(255);
         
-        // Now param is on top, store it in local 250
         self.emit_byte(STORE);
         self.emit_byte(250);
         
-        // Check if negative
         self.emit_byte(LOAD);
         self.emit_byte(250);
         self.emit_push32(0);
@@ -749,7 +815,6 @@ impl NVMCodeGen {
         self.emit_byte(JZ32);
         self.emit_label_ref(&not_negative_label);
         
-        // If negative, print '-' and negate
         self.emit_push32('-' as i32);
         self.emit_byte(SYSCALL);
         self.emit_byte(SYSCALL_PRINT);
@@ -764,7 +829,6 @@ impl NVMCodeGen {
         
         self.add_label(&not_negative_label);
         
-        // Special case for 0
         self.emit_byte(LOAD);
         self.emit_byte(250);
         self.emit_push32(0);
@@ -778,15 +842,12 @@ impl NVMCodeGen {
         self.emit_byte(SYSCALL);
         self.emit_byte(SYSCALL_PRINT);
         
-        // Restore return address before RET
         self.emit_byte(LOAD);
         self.emit_byte(255);
         self.emit_byte(RET);
         
         self.add_label(&not_zero);
         
-        // Find the highest power of 10 <= value
-        // Store divisor in local 251
         self.emit_push32(1);
         self.emit_byte(STORE);
         self.emit_byte(251);
@@ -796,7 +857,6 @@ impl NVMCodeGen {
         
         self.add_label(&find_power_loop);
         
-        // Check if divisor * 10 > value
         self.emit_byte(LOAD);
         self.emit_byte(251);
         self.emit_push32(10);
@@ -808,7 +868,6 @@ impl NVMCodeGen {
         self.emit_byte(JNZ32);
         self.emit_label_ref(&find_power_done);
         
-        // divisor *= 10
         self.emit_byte(LOAD);
         self.emit_byte(251);
         self.emit_push32(10);
@@ -821,13 +880,11 @@ impl NVMCodeGen {
         
         self.add_label(&find_power_done);
         
-        // Print digits
         let print_loop = self.generate_label("print_digit_loop");
         let print_done = self.generate_label("print_done");
         
         self.add_label(&print_loop);
         
-        // Check if divisor > 0
         self.emit_byte(LOAD);
         self.emit_byte(251);
         self.emit_push32(0);
@@ -836,20 +893,17 @@ impl NVMCodeGen {
         self.emit_byte(JZ32);
         self.emit_label_ref(&print_done);
         
-        // digit = value / divisor
         self.emit_byte(LOAD);
         self.emit_byte(250);
         self.emit_byte(LOAD);
         self.emit_byte(251);
         self.emit_byte(DIV);
         
-        // Print digit
         self.emit_push32('0' as i32);
         self.emit_byte(ADD);
         self.emit_byte(SYSCALL);
         self.emit_byte(SYSCALL_PRINT);
         
-        // value = value % divisor
         self.emit_byte(LOAD);
         self.emit_byte(250);
         self.emit_byte(LOAD);
@@ -858,7 +912,6 @@ impl NVMCodeGen {
         self.emit_byte(STORE);
         self.emit_byte(250);
         
-        // divisor /= 10
         self.emit_byte(LOAD);
         self.emit_byte(251);
         self.emit_push32(10);
@@ -871,7 +924,6 @@ impl NVMCodeGen {
         
         self.add_label(&print_done);
         
-        // Restore return address before RET
         self.emit_byte(LOAD);
         self.emit_byte(255);
         self.emit_byte(RET);

@@ -148,6 +148,7 @@ pub enum AsmPart {
 #[derive(Debug, Clone)]
 pub struct FormatSpec {
     pub width: Option<usize>,
+    #[allow(dead_code)]
     pub precision: Option<usize>,
     pub format_type: FormatType,
     pub padding: char,
@@ -155,11 +156,11 @@ pub struct FormatSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormatType {
-    Decimal,      // d - decimal integer
-    Hex,          // x - hexadecimal lowercase
-    HexUpper,     // X - hexadecimal uppercase
-    String,       // s - string
-    Auto,         // auto-detect based on expression type
+    Decimal,
+    Hex,
+    HexUpper,
+    String,
+    Auto,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,4 +1,3 @@
-// C code generator - generates C code and compiles with cl.exe
 use crate::ast::*;
 use std::process::Command;
 use std::fs;
@@ -7,7 +6,7 @@ use std::collections::HashMap;
 
 pub struct CCodeGen {
     output: String,
-    var_types: HashMap<String, bool>, // true = string, false = number
+    var_types: HashMap<String, bool>,
     temp_counter: usize,
 }
 
@@ -210,13 +209,9 @@ impl CCodeGen {
                 self.output.push_str(")");
             }
             Expression::TemplateString { parts } => {
-                // Generate temp variable name
                 let temp_name = format!("_temp_str_{}", self.temp_counter);
                 self.temp_counter += 1;
                 
-                // This is a hack - we'll return the temp var name
-                // But we need to generate the allocation code BEFORE this expression
-                // For now, just use identifier
                 self.output.push_str(&temp_name);
             }
             _ => {}
@@ -225,7 +220,6 @@ impl CCodeGen {
     }
 
     fn generate_string_interpolation(&mut self, s: &str) -> Result<(), String> {
-        // Parse string parts - just copy as-is for string literals
         self.output.push('"');
         self.output.push_str(&s.replace("\\", "\\\\").replace("\"", "\\\""));
         self.output.push('"');
@@ -234,14 +228,11 @@ impl CCodeGen {
 
 
     pub fn compile_c_code(&self, c_code: &str, output_path: &str) -> Result<(), String> {
-        // Create build directory
         fs::create_dir_all("build").map_err(|e| e.to_string())?;
         
-        // Write C code to build directory
         let temp_c = "build/temp_perano.c";
         fs::write(temp_c, c_code).map_err(|e| e.to_string())?;
 
-        // Try cl.exe first (Visual Studio compiler)
         let result = if let Ok(output) = Command::new("cl.exe")
             .args(&["/nologo", "/O2", temp_c, &format!("/Fe:{}", output_path)])
             .current_dir(".")

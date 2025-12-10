@@ -320,15 +320,12 @@ impl AsmGenerator {
                 
                 self.output.push_str("    # inline asm\n");
                 
-                // Build full asm code with variable interpolation
                 for part in parts {
                     match part {
                         AsmPart::Literal(s) => {
                             self.output.push_str(s);
                         }
                         AsmPart::Variable(var_name) => {
-                            // For ELF/x86-64, we'd load from stack or register
-                            // This is a simplified version
                             self.output.push_str(&format!("    # Variable: {}\n", var_name));
                         }
                     }
@@ -539,21 +536,17 @@ impl AsmGenerator {
             Expression::TemplateString { parts } => {
                 use crate::ast::{TemplateStringPart, FormatType};
                 
-                // Allocate a buffer on stack (1024 bytes)
                 self.output.push_str("    subq    $1024, %rsp\n");
-                self.output.push_str("    movq    %rsp, %r15\n"); // r15 = buffer pointer
+                self.output.push_str("    movq    %rsp, %r15\n");
                 
-                // Initialize buffer with empty string
                 self.output.push_str("    movb    $0, (%r15)\n");
                 
-                // Allocate temporary buffer for sprintf (128 bytes)
                 self.output.push_str("    subq    $128, %rsp\n");
-                self.output.push_str("    movq    %rsp, %r14\n"); // r14 = temp buffer
+                self.output.push_str("    movq    %rsp, %r14\n");
                 
                 for part in parts {
                     match part {
                         TemplateStringPart::Literal(lit) => {
-                            // Concatenate literal string to buffer
                             let idx = self.string_literals.len();
                             self.string_literals.push(lit.clone());
                             
@@ -562,23 +555,18 @@ impl AsmGenerator {
                             self.output.push_str("    call    strcat@PLT\n");
                         }
                         TemplateStringPart::Expression { expr, format } => {
-                            // Determine if expression is a string or number
                             let is_string_expr = matches!(
                                 expr.as_ref(),
                                 Expression::String(_) | Expression::Identifier(_)
                             );
                             
-                            // Evaluate expression
                             self.generate_expression(expr);
                             
-                            // If it's already a string pointer, just concatenate
                             if is_string_expr && format.is_none() {
-                                // rax contains pointer to string
                                 self.output.push_str("    movq    %r15, %rdi\n");
                                 self.output.push_str("    movq    %rax, %rsi\n");
                                 self.output.push_str("    call    strcat@PLT\n");
                             } else {
-                                // Convert to string using sprintf into temp buffer
                                 let format_str = if let Some(spec) = format {
                                     match spec.format_type {
                                         FormatType::Hex => {
@@ -624,15 +612,12 @@ impl AsmGenerator {
                                 let fmt_idx = self.string_literals.len();
                                 self.string_literals.push(format_str);
                                 
-                                // sprintf(temp_buffer, format, value)
-                                // rdi = temp_buffer, rsi = format, rdx = value
                                 self.output.push_str("    movq    %rax, %rdx\n");
                                 self.output.push_str("    movq    %r14, %rdi\n");
                                 self.output.push_str(&format!("    leaq    .LS{}(%rip), %rsi\n", fmt_idx));
                                 self.output.push_str("    xorl    %eax, %eax\n");
                                 self.output.push_str("    call    sprintf@PLT\n");
                                 
-                                // Concatenate temp buffer to main buffer
                                 self.output.push_str("    movq    %r15, %rdi\n");
                                 self.output.push_str("    movq    %r14, %rsi\n");
                                 self.output.push_str("    call    strcat@PLT\n");
@@ -641,10 +626,8 @@ impl AsmGenerator {
                     }
                 }
                 
-                // Return pointer to buffer
                 self.output.push_str("    movq    %r15, %rax\n");
                 
-                // Note: we're not cleaning up the stack here, it will be done at function exit
             }
             Expression::StringIndex { string, index } => {
                 if let Expression::String(s) = string.as_ref() {
@@ -671,8 +654,6 @@ impl AsmGenerator {
                 self.output.push_str("    movq    (%rax), %rax\n");
             }
             Expression::Eval { instruction: _ } => {
-                // eval() is not supported for ELF/x64 target
-                // Just push 0
                 self.output.push_str("    movq    $0, %rax\n");
             }
         }

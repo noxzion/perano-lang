@@ -5,6 +5,7 @@ mod elf;
 mod pe;
 mod nvm;
 mod error;
+mod typechecker;
 
 use std::fs;
 use std::env;
@@ -51,6 +52,13 @@ fn main() {
     let source_dir = std::path::Path::new(source_file).parent().unwrap_or(std::path::Path::new("."));
     if let Err(e) = load_modules(&mut ast, source_dir, &mut std::collections::HashSet::new()) {
         e.display();
+        process::exit(1);
+    }
+
+    let mut type_checker = typechecker::TypeChecker::new();
+    if let Err(errors) = type_checker.check_program(&ast) {
+        eprintln!("Type checking failed with {} error(s):", errors.len());
+        type_checker.print_errors();
         process::exit(1);
     }
 

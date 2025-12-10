@@ -10,6 +10,7 @@ pub struct NVMAssemblyGenerator {
     next_local: u8,
     loop_stack: Vec<(String, String)>,
     current_function: String,
+    vga_cursor: u32,
 }
 
 impl NVMAssemblyGenerator {
@@ -22,7 +23,42 @@ impl NVMAssemblyGenerator {
             next_local: 0,
             loop_stack: Vec::new(),
             current_function: String::new(),
+            vga_cursor: 0xB8000 + (18 * 160),
         }
+    }
+    
+    fn has_return_or_exit(&self, stmts: &[Statement]) -> bool {
+        for stmt in stmts {
+            match stmt {
+                Statement::Return(_) => return true,
+                Statement::InlineAsm { parts } => {
+                    for part in parts {
+                        if let crate::ast::AsmPart::Literal(s) = part {
+                            if s.contains("syscall") && s.contains("exit") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                Statement::If { then_body, else_body, .. } => {
+                    if self.has_return_or_exit(then_body) {
+                        return true;
+                    }
+                    if let Some(else_stmts) = else_body {
+                        if self.has_return_or_exit(else_stmts) {
+                            return true;
+                        }
+                    }
+                }
+                Statement::For { body, .. } => {
+                    if self.has_return_or_exit(body) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     pub fn generate(&mut self, program: &Program) -> String {
@@ -44,7 +80,6 @@ impl NVMAssemblyGenerator {
 
         
         for (module_name, module) in &program.modules {
-            // Skip generating stubs for stdio module - they're handled inline
             if module_name == "stdio" {
                 continue;
             }
@@ -65,7 +100,7 @@ impl NVMAssemblyGenerator {
         self.next_local = 0;
 
         self.output.push_str(&format!("; Function: {}\n", func.name));
-        self.output.push_str(&format!("func_{}:\n", func.name));
+        self.output.push_str(&format!("fn_{}:\n", func.name));
 
         
         for (i, param) in func.params.iter().enumerate() {
@@ -79,8 +114,7 @@ impl NVMAssemblyGenerator {
             self.generate_statement(stmt, program);
         }
 
-        
-        if func.name == "main" {
+        if func.name == "main" && !self.has_return_or_exit(&func.body) {
             self.output.push_str("    ; Main returns 0 by default\n");
             self.output.push_str("    push 0\n");
             self.output.push_str("    syscall exit\n");
@@ -95,7 +129,7 @@ impl NVMAssemblyGenerator {
         self.next_local = 0;
 
         self.output.push_str(&format!("; Module Function: {}\n", full_name));
-        self.output.push_str(&format!("func_{}:\n", full_name));
+        self.output.push_str(&format!("fn_{}:\n", full_name));
 
         for (i, param) in func.params.iter().enumerate() {
             self.local_vars.insert(param.name.clone(), i as u8);
@@ -210,15 +244,11 @@ impl NVMAssemblyGenerator {
 
             Statement::Return(value) => {
                 if let Some(_expr) = value {
-                    // self.output.push_str("    ; return\n");
-                    // self.generate_expression(_expr, program);
                 }
-                // self.output.push_str("    ret\n");
             }
 
             Statement::Expression(expr) => {
                 self.generate_expression(expr, program);
-                // self.output.push_str("    pop  ; discard result\n");
             }
 
             Statement::PointerAssignment { target, value } => {
@@ -233,25 +263,27 @@ impl NVMAssemblyGenerator {
                 
                 self.output.push_str("    ; inline asm\n");
                 
-                // Build full asm code with variable interpolation
                 for part in parts {
                     match part {
                         AsmPart::Literal(s) => {
-                            self.output.push_str(s);
+                            for line in s.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    self.output.push_str("    ");
+                                    self.output.push_str(trimmed);
+                                    self.output.push_str("\n");
+                                }
+                            }
                         }
                         AsmPart::Variable(var_name) => {
-                            // Check if variable is compile-time constant string
-                            // For now, just emit load instruction
-                            // TODO: support string variable substitution
                             if let Some(&local_index) = self.local_vars.get(var_name) {
-                                self.output.push_str(&format!("load {}", local_index));
+                                self.output.push_str(&format!("    load {}  ; ${}\n", local_index, var_name));
                             } else {
-                                self.output.push_str(&format!("; ERROR: Unknown variable: {}", var_name));
+                                self.output.push_str(&format!("    ; ERROR: Unknown variable: {}\n", var_name));
                             }
                         }
                     }
                 }
-                self.output.push_str("\n");
             }
 
             _ => {
@@ -273,22 +305,18 @@ impl NVMAssemblyGenerator {
             Expression::TemplateString { parts } => {
                 use crate::ast::TemplateStringPart;
                 
-                // For NVM, print each part of the template string inline
                 self.output.push_str("    ; template string\n");
                 
                 for part in parts {
                     match part {
                         TemplateStringPart::Literal(lit) => {
-                            // Print literal string
                             for ch in lit.as_bytes() {
-                                self.output.push_str(&format!("    push {}\n", *ch as i32));
-                                self.output.push_str("    syscall print\n");
+                                self.emit_vga_char(*ch, 0x07);
                             }
                         }
                         TemplateStringPart::Expression { expr, format: _ } => {
-                            // Evaluate and print the expression
                             self.generate_expression(expr, program);
-                            self.output.push_str("    syscall print_int\n");
+                            self.output.push_str("    call32 __print_int_vga\n");
                         }
                     }
                 }
@@ -354,46 +382,31 @@ impl NVMAssemblyGenerator {
                 for arg in args.iter().rev() {
                     self.generate_expression(arg, program);
                 }
-                self.output.push_str(&format!("    call32 func_{}\n", function));
+                self.output.push_str(&format!("    call32 fn_{}\n", function));
             }
 
             Expression::ModuleCall { module, function, args } => {
                 if module == "stdio" {
-                    if function == "PrintStr" || function == "PrintlnStr" {
-                        if !args.is_empty() {
-                            if let Expression::String(s) = &args[0] {
-                                self.emit_printstr(s, function == "PrintlnStr");
-                                return;
-                            }
-                        }
-                    } else if function == "Print" || function == "Println" {
+                    if function == "Print" || function == "Println" {
                         self.output.push_str(&format!("    ; call {}.{}\n", module, function));
                         if !args.is_empty() {
-                            // Check if argument is a string
                             if let Expression::String(s) = &args[0] {
-                                // Print string directly
                                 for ch in s.as_bytes() {
-                                    self.output.push_str(&format!("    push {}\n", *ch as i32));
-                                    self.output.push_str("    syscall print\n");
+                                    self.emit_vga_char(*ch, 0x07);
                                 }
                                 if function == "Println" {
-                                    self.output.push_str("    push 10\n"); // newline character
-                                    self.output.push_str("    syscall print\n");
+                                    self.emit_vga_newline();
                                 }
                             } else if let Expression::TemplateString { .. } = &args[0] {
-                                // Template string already prints itself, just add newline if needed
                                 self.generate_expression(&args[0], program);
                                 if function == "Println" {
-                                    self.output.push_str("    push 10\n"); // newline character
-                                    self.output.push_str("    syscall print\n");
+                                    self.emit_vga_newline();
                                 }
                             } else {
-                                // Print integer - generate inline syscall
                                 self.generate_expression(&args[0], program);
-                                self.output.push_str("    syscall print_int\n");
+                                self.output.push_str("    call32 __print_int_vga\n");
                                 if function == "Println" {
-                                    self.output.push_str("    push 10\n"); // newline character
-                                    self.output.push_str("    syscall print\n");
+                                    self.emit_vga_newline();
                                 }
                             }
                         }
@@ -405,7 +418,7 @@ impl NVMAssemblyGenerator {
                 for arg in args.iter().rev() {
                     self.generate_expression(arg, program);
                 }
-                self.output.push_str(&format!("    call32 func_{}_{}\n", module, function));
+                self.output.push_str(&format!("    call32 fn_{}_{}\n", module, function));
             }
 
             Expression::AddressOf { operand } => {
@@ -440,18 +453,19 @@ impl NVMAssemblyGenerator {
         format!("{}_{}_{}", prefix, self.current_function, self.label_counter)
     }
 
-    fn emit_printstr(&mut self, s: &str, _newline: bool) {
-        // Default to printing at last line start (as HelloWorld example)
-        // Each VGA character cell is two bytes: (attr << 8) | char
-        let base_addr = 0xB8F00u32;
-        let attr = 0x07u32;
-
-        for (i, ch) in s.as_bytes().iter().enumerate() {
-            let addr = base_addr + (i as u32 * 2);
-            let val = ((attr as u32) << 8) | (*ch as u32);
-            self.output.push_str(&format!("    push 0x{:X}\n", addr));
-            self.output.push_str(&format!("    push 0x{:X}\n", val));
-            self.output.push_str("    store_abs\n");
+    fn emit_vga_char(&mut self, ch: u8, attr: u8) {
+        let val = ((attr as u32) << 8) | (ch as u32);
+        self.output.push_str(&format!("    push 0x{:X}\n", self.vga_cursor));
+        self.output.push_str(&format!("    push 0x{:X}\n", val));
+        self.output.push_str("    store_abs\n");
+        self.vga_cursor += 2;
+    }
+    
+    fn emit_vga_newline(&mut self) {
+        self.vga_cursor = ((self.vga_cursor - 0xB8000) / 160 + 1) * 160 + 0xB8000;
+        self.vga_cursor += 160;
+        if self.vga_cursor >= 0xB8F00 {
+            self.vga_cursor = 0xB8000 + (18 * 160);
         }
     }
 }
