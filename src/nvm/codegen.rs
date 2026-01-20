@@ -29,7 +29,7 @@ const STORE_ABS: u8 = 0x45;
 const SYSCALL: u8 = 0x50;
 
 const SYSCALL_EXIT: u8 = 0x00;
-const SYSCALL_PRINT: u8 = 0x0F;
+const SYSCALL_PRINT: u8 = 0x0E;
 const SYSCALL_EXEC: u8 = 0x01;
 const SYSCALL_OPEN: u8 = 0x02;
 const SYSCALL_READ: u8 = 0x03;
@@ -42,7 +42,7 @@ const SYSCALL_MSG_SEND: u8 = 0x0A;
 const SYSCALL_MSG_RECEIVE: u8 = 0x0B;
 const SYSCALL_PORT_IN_BYTE: u8 = 0x0C;
 const SYSCALL_PORT_OUT_BYTE: u8 = 0x0D;
-const SYSCALL_GET_LOCAL_ADDR: u8 = 0x0E;
+const SYSCALL_GET_LOCAL_ADDR: u8 = 0x0F;
 
 pub struct NVMCodeGen {
     bytecode: Vec<u8>,
@@ -54,7 +54,6 @@ pub struct NVMCodeGen {
     current_function: String,
     string_literals: Vec<(String, String)>,
     compile_time_strings: HashMap<String, String>,
-    vga_cursor: u32,
 }
 
 impl NVMCodeGen {
@@ -69,7 +68,6 @@ impl NVMCodeGen {
             current_function: String::new(),
             string_literals: Vec::new(),
             compile_time_strings: HashMap::new(),
-            vga_cursor: 0xB8000 + (18 * 160),
         }
     }
     
@@ -133,7 +131,7 @@ impl NVMCodeGen {
         }
 
         if program.modules.contains_key("stdio") {
-            self.generate_print_int_vga_helper();
+            self.generate_print_int_helper();
         }
 
         self.emit_string_literals();
@@ -161,6 +159,11 @@ impl NVMCodeGen {
         }
 
         if func.name == "main" && !self.has_return_or_exit(&func.body) {
+            
+            self.emit_push32(10);
+            self.emit_byte(SYSCALL);
+            self.emit_byte(SYSCALL_PRINT);
+
             self.emit_push32(0);
             self.emit_byte(SYSCALL);
             self.emit_byte(SYSCALL_EXIT);
@@ -458,13 +461,29 @@ impl NVMCodeGen {
                                         self.emit_byte(SYSCALL);
                                         self.emit_byte(SYSCALL_PRINT);
                                     }
+                                    
                                     self.emit_push32(0);
+                                    self.emit_push32(10);
+                                    self.emit_byte(SYSCALL);
+                                    self.emit_byte(SYSCALL_PRINT);
+                                    return;
+                                } else if let Expression::TemplateString { .. } = &args[0] {
+                                    
+                                    self.generate_expression(&args[0], program);
+                                    self.emit_push32(0);
+                                    self.emit_push32(10);
+                                    self.emit_byte(SYSCALL);
+                                    self.emit_byte(SYSCALL_PRINT);
                                     return;
                                 } else {
                                     self.generate_expression(&args[0], program);
                                     self.emit_byte(CALL32);
                                     self.emit_label_ref("__print_int");
+                                    
                                     self.emit_push32(0);
+                                    self.emit_push32(10);
+                                    self.emit_byte(SYSCALL);
+                                    self.emit_byte(SYSCALL_PRINT);
                                     return;
                                 }
                             }
@@ -477,22 +496,26 @@ impl NVMCodeGen {
                                         self.emit_byte(SYSCALL);
                                         self.emit_byte(SYSCALL_PRINT);
                                     }
-                                    self.emit_push32('\n' as i32);
+                                    
+                                    self.emit_push32(10);
                                     self.emit_byte(SYSCALL);
                                     self.emit_byte(SYSCALL_PRINT);
                                     self.emit_push32(0);
                                     return;
                                 } else if let Expression::TemplateString { .. } = &args[0] {
                                     self.generate_expression(&args[0], program);
-                                    self.emit_push32('\n' as i32);
+                                    
+                                    self.emit_push32(10);
                                     self.emit_byte(SYSCALL);
                                     self.emit_byte(SYSCALL_PRINT);
+                                    self.emit_push32(0);
                                     return;
                                 } else {
                                     self.generate_expression(&args[0], program);
                                     self.emit_byte(CALL32);
                                     self.emit_label_ref("__print_int");
-                                    self.emit_push32('\n' as i32);
+                                    
+                                    self.emit_push32(10);
                                     self.emit_byte(SYSCALL);
                                     self.emit_byte(SYSCALL_PRINT);
                                     self.emit_push32(0);
@@ -677,21 +700,6 @@ impl NVMCodeGen {
         let bytes = value.to_be_bytes();
         self.bytecode.extend_from_slice(&bytes);
     }
-    
-    fn emit_vga_char(&mut self, ch: u8, attr: u8) {
-        self.emit_push32(self.vga_cursor as i32);
-        self.emit_push32(((attr as u32) << 8 | ch as u32) as i32);
-        self.emit_byte(STORE_ABS);
-        self.vga_cursor += 2;
-    }
-    
-    fn vga_newline(&mut self) {
-        self.vga_cursor = ((self.vga_cursor - 0xB8000) / 160 + 1) * 160 + 0xB8000;
-        self.vga_cursor += 160;
-        if self.vga_cursor >= 0xB8FA0 {
-            self.vga_cursor = 0xB8000 + (18 * 160);
-        }
-    }
 
     fn emit_asm_instruction(&mut self, line: &str) {
         let line = line.trim();
@@ -708,9 +716,23 @@ impl NVMCodeGen {
         match instr.as_str() {
             "push32" | "push" => {
                 if parts.len() > 1 {
-                    if let Ok(value) = parts[1].parse::<i32>() {
-                        self.emit_push32(value);
-                    }
+                    let arg = parts[1];
+                    let parsed = if arg.len() >= 3 && arg.starts_with('\'') && arg.ends_with('\'') {
+                        
+                        let inner = &arg[1..arg.len()-1];
+                        let ch_val: i32 = match inner {
+                            "\\n" => '\n' as i32,
+                            "\\r" => '\r' as i32,
+                            "\\t" => '\t' as i32,
+                            "\\0" => 0,
+                            "\\'" => '\'' as i32,
+                            "\\\\" => '\\' as i32,
+                            _ => inner.chars().next().map(|c| c as i32).unwrap_or(0),
+                        };
+                        Some(ch_val)
+                    } else if let Ok(value) = arg.parse::<i32>() { Some(value) } else { None };
+
+                    if let Some(value) = parsed { self.emit_push32(value); }
                 }
             }
             "pop" => self.emit_byte(POP),
@@ -729,6 +751,7 @@ impl NVMCodeGen {
                         let syscall_num = match syscall_arg.to_lowercase().as_str() {
                             "exit" => SYSCALL_EXIT,
                             "exec" => SYSCALL_EXEC,
+                            "print" => SYSCALL_PRINT,
                             "read" => SYSCALL_READ,
                             "write" => SYSCALL_WRITE,
                             "create" => SYSCALL_CREATE,
@@ -739,7 +762,6 @@ impl NVMCodeGen {
                             "msg_receive" | "msg_recv" => SYSCALL_MSG_RECEIVE,
                             "inb" | "port_in_byte" => SYSCALL_PORT_IN_BYTE,
                             "outb" | "port_out_byte" => SYSCALL_PORT_OUT_BYTE,
-                            
                             "get_local_addr" => SYSCALL_GET_LOCAL_ADDR,
                             _ => {
                                 eprintln!("Warning: Unknown syscall name '{}', defaulting to 0", syscall_arg);
@@ -799,7 +821,7 @@ impl NVMCodeGen {
         }
     }
 
-    fn generate_print_int_vga_helper(&mut self) {
+    fn generate_print_int_helper(&mut self) {
         self.add_label("__print_int");
         
         self.emit_byte(STORE);

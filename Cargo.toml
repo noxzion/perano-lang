@@ -1,6 +1,9 @@
 [package]
-name = "perano-lang"
+name = "perano"
 version = "0.4.0"
 edition = "2021"
 
 [dependencies]
+
+[build-dependencies]
+cc = "1"

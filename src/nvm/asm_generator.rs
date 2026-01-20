@@ -10,10 +10,85 @@ pub struct NVMAssemblyGenerator {
     next_local: u8,
     loop_stack: Vec<(String, String)>,
     current_function: String,
-    vga_cursor: u32,
+    print_int_helper_emitted: bool,
 }
-
 impl NVMAssemblyGenerator {
+    fn ensure_print_int_helper(&mut self) {
+        if self.print_int_helper_emitted { return; }
+        self.print_int_helper_emitted = true;
+        
+        self.output.push_str("__print_int_sys:\n");
+        
+        self.output.push_str("    store 250\n");
+        
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    push 0\n");
+        self.output.push_str("    eq\n");
+        let lbl_not_zero = "__pint_not_zero";
+        self.output.push_str(&format!("    jz32 {}\n", lbl_not_zero));
+        self.output.push_str("    push '0'\n");
+        self.output.push_str("    syscall print\n");
+        self.output.push_str("    ret\n");
+        self.output.push_str(&format!("{}:\n", lbl_not_zero));
+        
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    push 0\n");
+        self.output.push_str("    lt\n");
+        let lbl_not_neg = "__pint_not_neg";
+        self.output.push_str(&format!("    jz32 {}\n", lbl_not_neg));
+        self.output.push_str("    push '-'\n");
+        self.output.push_str("    syscall print\n");
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    push 0\n");
+        self.output.push_str("    swap\n");
+        self.output.push_str("    sub\n");
+        self.output.push_str("    store 250\n");
+        self.output.push_str(&format!("{}:\n", lbl_not_neg));
+        
+        self.output.push_str("    push 1\n");
+        self.output.push_str("    store 251\n");
+        let lbl_find = "__pint_find";
+        let lbl_find_done = "__pint_find_done";
+        self.output.push_str(&format!("{}:\n", lbl_find));
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    push 10\n");
+        self.output.push_str("    mul\n");
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    gt\n");
+        self.output.push_str(&format!("    jnz32 {}\n", lbl_find_done));
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    push 10\n");
+        self.output.push_str("    mul\n");
+        self.output.push_str("    store 251\n");
+        self.output.push_str(&format!("    jmp32 {}\n", lbl_find));
+        self.output.push_str(&format!("{}:\n", lbl_find_done));
+        
+        let lbl_loop = "__pint_loop";
+        let lbl_done = "__pint_done";
+        self.output.push_str(&format!("{}:\n", lbl_loop));
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    push 0\n");
+        self.output.push_str("    gt\n");
+        self.output.push_str(&format!("    jz32 {}\n", lbl_done));
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    div\n");
+        self.output.push_str("    push '0'\n");
+        self.output.push_str("    add\n");
+        self.output.push_str("    syscall print\n");
+        self.output.push_str("    load 250\n");
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    mod\n");
+        self.output.push_str("    store 250\n");
+        self.output.push_str("    load 251\n");
+        self.output.push_str("    push 10\n");
+        self.output.push_str("    div\n");
+        self.output.push_str("    store 251\n");
+        self.output.push_str(&format!("    jmp32 {}\n", lbl_loop));
+        self.output.push_str(&format!("{}:\n", lbl_done));
+        self.output.push_str("    ret\n");
+    }
+
     pub fn new() -> Self {
         Self {
             output: String::new(),
@@ -23,7 +98,7 @@ impl NVMAssemblyGenerator {
             next_local: 0,
             loop_stack: Vec::new(),
             current_function: String::new(),
-            vga_cursor: 0xB8000 + (18 * 160),
+            print_int_helper_emitted: false,
         }
     }
     
@@ -116,6 +191,9 @@ impl NVMAssemblyGenerator {
 
         if func.name == "main" && !self.has_return_or_exit(&func.body) {
             self.output.push_str("    ; Main returns 0 by default\n");
+            
+            self.output.push_str("    push 10\n");
+            self.output.push_str("    syscall print\n");
             self.output.push_str("    push 0\n");
             self.output.push_str("    syscall exit\n");
         }
@@ -255,7 +333,6 @@ impl NVMAssemblyGenerator {
                 self.output.push_str("    ; *ptr = value\n");
                 self.generate_expression(target, program);
                 self.generate_expression(value, program);
-                self.output.push_str("    store_abs\n");
             }
 
             Statement::InlineAsm { parts } => {
@@ -310,13 +387,21 @@ impl NVMAssemblyGenerator {
                 for part in parts {
                     match part {
                         TemplateStringPart::Literal(lit) => {
-                            for ch in lit.as_bytes() {
-                                self.emit_vga_char(*ch, 0x07);
+                            for &ch in lit.as_bytes() {
+                                let val: u8 = match ch {
+                                    b'\n' => 10,
+                                    b'\r' => 13,
+                                    b'\t' => 9,
+                                    _ => ch,
+                                };
+                                self.output.push_str(&format!("    push {}\n", val));
+                                self.output.push_str("    syscall print\n");
                             }
                         }
                         TemplateStringPart::Expression { expr, format: _ } => {
                             self.generate_expression(expr, program);
-                            self.output.push_str("    call __print_int_vga\n");
+                            self.ensure_print_int_helper();
+                            self.output.push_str("    call __print_int_sys\n");
                         }
                     }
                 }
@@ -398,22 +483,33 @@ impl NVMAssemblyGenerator {
                         self.output.push_str(&format!("    ; call {}.{}\n", module, function));
                         if !args.is_empty() {
                             if let Expression::String(s) = &args[0] {
-                                for ch in s.as_bytes() {
-                                    self.emit_vga_char(*ch, 0x07);
+                                for &ch in s.as_bytes() {
+                                    let val: u8 = match ch {
+                                        b'\n' => 10,
+                                        b'\r' => 13,
+                                        b'\t' => 9,
+                                        _ => ch,
+                                    };
+                                    self.output.push_str(&format!("    push {}\n", val));
+                                    self.output.push_str("    syscall print\n");
                                 }
                                 if function == "Println" {
-                                    self.emit_vga_newline();
+                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    syscall print\n");
                                 }
                             } else if let Expression::TemplateString { .. } = &args[0] {
                                 self.generate_expression(&args[0], program);
                                 if function == "Println" {
-                                    self.emit_vga_newline();
+                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    syscall print\n");
                                 }
                             } else {
                                 self.generate_expression(&args[0], program);
-                                self.output.push_str("    call __print_int_vga\n");
+                                self.ensure_print_int_helper();
+                                self.output.push_str("    call __print_int_sys\n");
                                 if function == "Println" {
-                                    self.emit_vga_newline();
+                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    syscall print\n");
                                 }
                             }
                         }
@@ -460,19 +556,8 @@ impl NVMAssemblyGenerator {
         format!("{}_{}_{}", prefix, self.current_function, self.label_counter)
     }
 
-    fn emit_vga_char(&mut self, ch: u8, attr: u8) {
-        let val = ((attr as u32) << 8) | (ch as u32);
-        self.output.push_str(&format!("    push 0x{:X}\n", self.vga_cursor));
-        self.output.push_str(&format!("    push 0x{:X}\n", val));
-        self.output.push_str("    store_abs\n");
-        self.vga_cursor += 2;
-    }
     
-    fn emit_vga_newline(&mut self) {
-        self.vga_cursor = ((self.vga_cursor - 0xB8000) / 160 + 1) * 160 + 0xB8000;
-        self.vga_cursor += 160;
-        if self.vga_cursor >= 0xB8F00 {
-            self.vga_cursor = 0xB8000 + (18 * 160);
-        }
+
+
+        
     }
-}

@@ -1,0 +1,11 @@
+variables:
+  CC: "cargo"
+  CFLAGS: "build --release -q"
+
+targets:
+  all:
+    deps: [bin]
+
+  bin:
+    cmds:
+      - "${CC} ${CFLAGS}" 
