@@ -4,8 +4,12 @@ variables:
 
 targets:
   all:
-    deps: [bin]
+    deps: [bin, mv]
 
   bin:
     cmds:
       - "${CC} ${CFLAGS}" 
+
+  mv:
+    cmds:
+      - "sudo mv ./target/release/perano /bin/perano" 

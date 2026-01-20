@@ -329,12 +329,6 @@ impl NVMAssemblyGenerator {
                 self.generate_expression(expr, program);
             }
 
-            Statement::PointerAssignment { target, value } => {
-                self.output.push_str("    ; *ptr = value\n");
-                self.generate_expression(target, program);
-                self.generate_expression(value, program);
-            }
-
             Statement::InlineAsm { parts } => {
                 use crate::ast::AsmPart;
                 
@@ -522,26 +516,6 @@ impl NVMAssemblyGenerator {
                     self.generate_expression(arg, program);
                 }
                 self.output.push_str(&format!("    call fn_{}_{}\n", module, function));
-            }
-
-            Expression::AddressOf { operand } => {
-                if let Expression::Identifier(name) = operand.as_ref() {
-                    if let Some(&local_index) = self.local_vars.get(name) {
-                        self.output.push_str(&format!("    load_addr {}  ; &{}\n", local_index, name));
-                    } else {
-                        self.output.push_str(&format!("    ; ERROR: Variable not found: {}\n", name));
-                        self.output.push_str("    push 0\n");
-                    }
-                } else {
-                    self.output.push_str("    ; ERROR: AddressOf only supports identifiers\n");
-                    self.output.push_str("    push 0\n");
-                }
-            }
-
-            Expression::Deref { operand } => {
-                self.output.push_str("    ; *ptr\n");
-                self.generate_expression(operand, program);
-                self.output.push_str("    load_ptr\n");
             }
 
             _ => {

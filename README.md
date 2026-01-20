@@ -8,7 +8,7 @@ This repository contains the Perano compiler, Perano's standard library and tool
 <br>
 
 > [!IMPORTANT]
-> The current implementation of Perano is not final. It may be unstable and non-fully.
+> The Perano implementation from the `rewrite` branch is VERY unstable. I recommend waiting for a release in the `main` branch. 
 
 
 ### Examples

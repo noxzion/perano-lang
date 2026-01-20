@@ -341,12 +341,6 @@ impl NVMCodeGen {
                 }
             }
 
-            Statement::PointerAssignment { target, value } => {
-                self.generate_expression(target, program);
-                self.generate_expression(value, program);
-                self.emit_byte(STORE_ABS);
-            }
-
             _ => {}
         }
     }
@@ -654,25 +648,6 @@ impl NVMCodeGen {
                 let func_label = format!("func_{}_{}", module, function);
                 self.emit_byte(CALL32);
                 self.emit_label_ref(&func_label);
-            }
-
-            Expression::AddressOf { operand } => {
-                if let Expression::Identifier(name) = operand.as_ref() {
-                    if let Some(&local_index) = self.local_vars.get(name) {
-                        self.emit_push32(local_index as i32);
-                        self.emit_byte(SYSCALL);
-                        self.emit_byte(SYSCALL_GET_LOCAL_ADDR);
-                    } else {
-                        panic!("Variable not found: {}", name);
-                    }
-                } else {
-                    panic!("AddressOf only supports identifiers");
-                }
-            }
-
-            Expression::Deref { operand } => {
-                self.generate_expression(operand, program);
-                self.emit_byte(LOAD_ABS);
             }
 
             Expression::Eval { instruction } => {

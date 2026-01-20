@@ -61,10 +61,6 @@ pub enum Statement {
         index: Expression,
         value: Expression,
     },
-    PointerAssignment {
-        target: Expression,
-        value: Expression,
-    },
     If {
         condition: Expression,
         then_body: Vec<Statement>,
@@ -118,12 +114,6 @@ pub enum Expression {
     StringIndex {
         string: Box<Expression>,
         index: Box<Expression>,
-    },
-    AddressOf {
-        operand: Box<Expression>,
-    },
-    Deref {
-        operand: Box<Expression>,
     },
     Eval {
         instruction: Box<Expression>,

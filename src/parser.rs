@@ -211,22 +211,6 @@ impl Parser {
             Token::For => self.parse_for(),
             Token::Return => self.parse_return(),
             Token::Asm => self.parse_asm(),
-            Token::Star => {
-                let next_pos = self.position + 1;
-                let mut check_pos = next_pos;
-                while check_pos < self.tokens.len() {
-                    match &self.tokens[check_pos] {
-                        Token::Assign => {
-                            return self.parse_pointer_assignment();
-                        }
-                        Token::Identifier(_) | Token::LeftParen | Token::RightParen => {
-                            check_pos += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                Ok(Statement::Expression(self.parse_expression()))
-            }
             Token::Identifier(_) => {
                 let next_pos = self.position + 1;
                 if next_pos < self.tokens.len() && (matches!(self.tokens[next_pos], Token::Assign) || matches!(self.tokens[next_pos], Token::LBracket)) {
@@ -319,15 +303,6 @@ impl Parser {
         let value = self.parse_expression();
 
         Ok(Statement::Assignment { name, value })
-    }
-
-    fn parse_pointer_assignment(&mut self) -> crate::error::Result<Statement> {
-        self.expect(Token::Star)?;
-        let target = self.parse_primary();
-        self.expect(Token::Assign)?;
-        let value = self.parse_expression();
-
-        Ok(Statement::PointerAssignment { target, value })
     }
 
     fn parse_if(&mut self) -> crate::error::Result<Statement> {
@@ -705,20 +680,6 @@ impl Parser {
                 let operand = self.parse_unary();
                 Expression::Unary {
                     op: UnaryOp::Not,
-                    operand: Box::new(operand),
-                }
-            }
-            Token::Ampersand => {
-                self.advance();
-                let operand = self.parse_unary();
-                Expression::AddressOf {
-                    operand: Box::new(operand),
-                }
-            }
-            Token::Star => {
-                self.advance();
-                let operand = self.parse_unary();
-                Expression::Deref {
                     operand: Box::new(operand),
                 }
             }

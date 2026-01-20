@@ -41,7 +41,6 @@ pub enum Token {
     Colon,
     Dot,
     Arrow,
-    Ampersand,
     DoublePlus,
     Dollar,
 
@@ -160,7 +159,6 @@ impl Lexer {
             "package" => Token::Package,
             "import" => Token::Import,
             "use" => Token::Import,
-            "func" => Token::Func,
             "fn" => Token::Func,
             "var" => Token::Var,
             "let" => Token::Var,
@@ -294,7 +292,16 @@ impl Lexer {
                         tokens.push(Token::And);
                         self.advance();
                     } else {
-                        tokens.push(Token::Ampersand);
+                        use crate::error::{CompileError, ErrorKind};
+                        let err = CompileError::new(
+                            ErrorKind::LexerError,
+                            "unexpected character: '&'".to_string(),
+                            self.file.clone(),
+                            self.line,
+                            self.column,
+                        );
+                        err.display();
+                        std::process::exit(1);
                     }
                 }
                 Some('|') => {

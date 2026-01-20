@@ -11,7 +11,6 @@ pub enum Type {
     U8,
     Bool,
     String,
-    Ptr(Box<Type>),
     Array(Box<Type>, usize),
     Void,
     Unknown,
@@ -30,10 +29,6 @@ impl Type {
             "string" => Type::String,
             "void" => Type::Void,
             _ => {
-                if s.starts_with('*') {
-                    let inner = Type::from_string(&s[1..]);
-                    return Type::Ptr(Box::new(inner));
-                }
                 if s.starts_with('[') && s.ends_with(']') {
                     let inner = &s[1..s.len()-1];
                     if let Some(semicolon_pos) = inner.find(';') {
@@ -322,17 +317,6 @@ impl TypeChecker {
                 self.infer_expression(expr);
             }
             
-            Statement::PointerAssignment { target, value } => {
-                let target_type = self.infer_expression(target);
-                if !matches!(target_type, Type::Ptr(_) | Type::Unknown) {
-                    self.add_error(format!(
-                        "Pointer dereference assignment requires a pointer type, got {:?}",
-                        target_type
-                    ));
-                }
-                
-                self.infer_expression(value);
-            }
             
             Statement::InlineAsm { .. } => {
             }
@@ -499,23 +483,6 @@ impl TypeChecker {
                 Type::U8
             }
             
-            Expression::AddressOf { operand } => {
-                let inner_type = self.infer_expression(operand);
-                Type::Ptr(Box::new(inner_type))
-            }
-            
-            Expression::Deref { operand } => {
-                let operand_type = self.infer_expression(operand);
-                if let Type::Ptr(inner) = operand_type {
-                    (*inner).clone()
-                } else {
-                    self.add_error(format!(
-                        "Cannot dereference non-pointer type {:?}",
-                        operand_type
-                    ));
-                    Type::Unknown
-                }
-            }
             
             Expression::Eval { instruction } => {
                 self.infer_expression(instruction);
