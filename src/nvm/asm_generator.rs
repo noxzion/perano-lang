@@ -1,5 +1,5 @@
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct NVMAssemblyGenerator {
     output: String,
@@ -8,85 +8,149 @@ pub struct NVMAssemblyGenerator {
     label_counter: u32,
     local_vars: HashMap<String, u8>,
     next_local: u8,
+    param_vars: HashMap<String, u8>,
     loop_stack: Vec<(String, String)>,
     current_function: String,
     print_int_helper_emitted: bool,
+    print_int_helper_code: String,
+    scratch_local: u8,
 }
 impl NVMAssemblyGenerator {
     fn ensure_print_int_helper(&mut self) {
         if self.print_int_helper_emitted { return; }
         self.print_int_helper_emitted = true;
-        
-        self.output.push_str("__print_int_sys:\n");
-        
-        self.output.push_str("    store 250\n");
-        
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    push 0\n");
-        self.output.push_str("    eq\n");
-        let lbl_not_zero = "__pint_not_zero";
-        self.output.push_str(&format!("    jz32 {}\n", lbl_not_zero));
-        self.output.push_str("    push '0'\n");
-        self.output.push_str("    syscall print\n");
-        self.output.push_str("    ret\n");
-        self.output.push_str(&format!("{}:\n", lbl_not_zero));
-        
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    push 0\n");
-        self.output.push_str("    lt\n");
-        let lbl_not_neg = "__pint_not_neg";
-        self.output.push_str(&format!("    jz32 {}\n", lbl_not_neg));
-        self.output.push_str("    push '-'\n");
-        self.output.push_str("    syscall print\n");
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    push 0\n");
-        self.output.push_str("    swap\n");
-        self.output.push_str("    sub\n");
-        self.output.push_str("    store 250\n");
-        self.output.push_str(&format!("{}:\n", lbl_not_neg));
-        
-        self.output.push_str("    push 1\n");
-        self.output.push_str("    store 251\n");
-        let lbl_find = "__pint_find";
-        let lbl_find_done = "__pint_find_done";
-        self.output.push_str(&format!("{}:\n", lbl_find));
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    push 10\n");
-        self.output.push_str("    mul\n");
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    gt\n");
-        self.output.push_str(&format!("    jnz32 {}\n", lbl_find_done));
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    push 10\n");
-        self.output.push_str("    mul\n");
-        self.output.push_str("    store 251\n");
-        self.output.push_str(&format!("    jmp32 {}\n", lbl_find));
-        self.output.push_str(&format!("{}:\n", lbl_find_done));
-        
-        let lbl_loop = "__pint_loop";
-        let lbl_done = "__pint_done";
-        self.output.push_str(&format!("{}:\n", lbl_loop));
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    push 0\n");
-        self.output.push_str("    gt\n");
-        self.output.push_str(&format!("    jz32 {}\n", lbl_done));
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    div\n");
-        self.output.push_str("    push '0'\n");
-        self.output.push_str("    add\n");
-        self.output.push_str("    syscall print\n");
-        self.output.push_str("    load 250\n");
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    mod\n");
-        self.output.push_str("    store 250\n");
-        self.output.push_str("    load 251\n");
-        self.output.push_str("    push 10\n");
-        self.output.push_str("    div\n");
-        self.output.push_str("    store 251\n");
-        self.output.push_str(&format!("    jmp32 {}\n", lbl_loop));
-        self.output.push_str(&format!("{}:\n", lbl_done));
-        self.output.push_str("    ret\n");
+        self.print_int_helper_code = String::from(
+"__print_int_sys:\n").to_string();
+        self.print_int_helper_code.push_str(
+"    enter 3\n");
+        self.print_int_helper_code.push_str(
+"    loada 0\n");
+        self.print_int_helper_code.push_str(
+"    storer 0\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    push 0\n");
+        self.print_int_helper_code.push_str(
+"    eq\n");
+        self.print_int_helper_code.push_str(
+"    jz __pint_zero_cont\n");
+        self.print_int_helper_code.push_str(
+"__pint_zero:\n");
+        self.print_int_helper_code.push_str(
+"    push '0'\n");
+        self.print_int_helper_code.push_str(
+"    syscall print\n");
+        self.print_int_helper_code.push_str(
+"    leave\n");
+        self.print_int_helper_code.push_str(
+"    ret\n");
+        self.print_int_helper_code.push_str(
+"__pint_zero_cont:\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    push 0\n");
+        self.print_int_helper_code.push_str(
+"    lt\n");
+        self.print_int_helper_code.push_str(
+"    jz __pint_not_neg\n");
+        self.print_int_helper_code.push_str(
+"    push '-'\n");
+        self.print_int_helper_code.push_str(
+"    syscall print\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    push 0\n");
+        self.print_int_helper_code.push_str(
+"    swap\n");
+        self.print_int_helper_code.push_str(
+"    sub\n");
+        self.print_int_helper_code.push_str(
+"    storer 0\n");
+        self.print_int_helper_code.push_str(
+"__pint_not_neg:\n");
+        self.print_int_helper_code.push_str(
+"    push 1\n");
+        self.print_int_helper_code.push_str(
+"    storer 1\n");
+        self.print_int_helper_code.push_str(
+"__pint_find:\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    push 10\n");
+        self.print_int_helper_code.push_str(
+"    mul\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    gt\n");
+        self.print_int_helper_code.push_str(
+"    jnz __pint_find_done\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    push 10\n");
+        self.print_int_helper_code.push_str(
+"    mul\n");
+        self.print_int_helper_code.push_str(
+"    storer 1\n");
+        self.print_int_helper_code.push_str(
+"    jmp __pint_find\n");
+        self.print_int_helper_code.push_str(
+"__pint_find_done:\n");
+        self.print_int_helper_code.push_str(
+"__pint_loop:\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    push 0\n");
+        self.print_int_helper_code.push_str(
+"    gt\n");
+        self.print_int_helper_code.push_str(
+"    jz __pint_done\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    div\n");
+        self.print_int_helper_code.push_str(
+"    storer 2\n");
+        self.print_int_helper_code.push_str(
+"    loadr 2\n");
+        self.print_int_helper_code.push_str(
+"    push '0'\n");
+        self.print_int_helper_code.push_str(
+"    add\n");
+        self.print_int_helper_code.push_str(
+"    syscall print\n");
+        self.print_int_helper_code.push_str(
+"    loadr 0\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    mod\n");
+        self.print_int_helper_code.push_str(
+"    storer 0\n");
+        self.print_int_helper_code.push_str(
+"    loadr 1\n");
+        self.print_int_helper_code.push_str(
+"    push 10\n");
+        self.print_int_helper_code.push_str(
+"    div\n");
+        self.print_int_helper_code.push_str(
+"    storer 1\n");
+        self.print_int_helper_code.push_str(
+"    jmp __pint_loop\n");
+        self.print_int_helper_code.push_str(
+"__pint_done:\n");
+        self.print_int_helper_code.push_str(
+"    leave\n");
+        self.print_int_helper_code.push_str(
+"    ret\n");
     }
 
     pub fn new() -> Self {
@@ -96,9 +160,12 @@ impl NVMAssemblyGenerator {
             label_counter: 0,
             local_vars: HashMap::new(),
             next_local: 0,
+            param_vars: HashMap::new(),
             loop_stack: Vec::new(),
             current_function: String::new(),
             print_int_helper_emitted: false,
+            print_int_helper_code: String::new(),
+            scratch_local: 0,
         }
     }
     
@@ -139,7 +206,7 @@ impl NVMAssemblyGenerator {
     pub fn generate(&mut self, program: &Program) -> String {
         
         self.output.push_str(".NVM0\n");
-        self.output.push_str("; Generated by Perano Language Compiler\n\n");
+        self.output.push_str("\n");
 
         
         if let Some(main_func) = program.functions.iter().find(|f| f.name == "main") {
@@ -166,59 +233,94 @@ impl NVMAssemblyGenerator {
             }
         }
 
+        if self.print_int_helper_emitted {
+            self.output.push_str(&self.print_int_helper_code);
+        }
         self.output.clone()
+    }
+
+    fn count_locals(stmts: &[Statement]) -> u8 {
+        let mut names: HashSet<String> = HashSet::new();
+        fn walk(stmts: &[Statement], out: &mut HashSet<String>) {
+            for s in stmts {
+                match s {
+                    Statement::VarDecl { name, .. } => {
+                        out.insert(name.clone());
+                    }
+                    Statement::If { then_body, else_body, .. } => {
+                        walk(then_body, out);
+                        if let Some(else_b) = else_body { walk(else_b, out); }
+                    }
+                    Statement::For { init, condition: _, post: _, body } => {
+                        if let Some(init_stmt) = init { walk(std::slice::from_ref(init_stmt), out); }
+                        walk(body, out);
+                    }
+                    Statement::Expression(_) | Statement::Assignment { .. } | Statement::Return(_) | Statement::InlineAsm { .. } | Statement::ArrayDecl { .. } | Statement::ArrayAssignment { .. } => {}
+                }
+            }
+        }
+        walk(stmts, &mut names);
+        u8::try_from(names.len()).unwrap_or(u8::MAX)
     }
 
     fn generate_function(&mut self, func: &Function, program: &Program) {
         self.current_function = func.name.clone();
         self.local_vars.clear();
+        self.param_vars.clear();
         self.next_local = 0;
 
         self.output.push_str(&format!("; Function: {}\n", func.name));
         self.output.push_str(&format!("fn_{}:\n", func.name));
 
         
+        let mut locals_count = Self::count_locals(&func.body);
+        self.scratch_local = locals_count;
+        locals_count = locals_count.saturating_add(1);
+        self.output.push_str(&format!("    enter {}\n", locals_count));
+
         for (i, param) in func.params.iter().enumerate() {
-            self.local_vars.insert(param.name.clone(), i as u8);
-            self.next_local = (i + 1) as u8;
-            self.output.push_str(&format!("    ; param: {} -> local {}\n", param.name, i));
+            self.param_vars.insert(param.name.clone(), i as u8);
+            self.output.push_str(&format!("    ; param: {} -> arg {}\n", param.name, i));
         }
 
-        
         for stmt in &func.body {
             self.generate_statement(stmt, program);
         }
 
         if func.name == "main" && !self.has_return_or_exit(&func.body) {
             self.output.push_str("    ; Main returns 0 by default\n");
-            
             self.output.push_str("    push 10\n");
             self.output.push_str("    syscall print\n");
             self.output.push_str("    push 0\n");
             self.output.push_str("    syscall exit\n");
         }
-        
+
+        self.output.push_str("    leave\n");
         self.output.push_str("    ret\n\n");
     }
 
     fn generate_module_function(&mut self, func: &Function, full_name: &str, program: &Program) {
         self.current_function = full_name.to_string();
         self.local_vars.clear();
+        self.param_vars.clear();
         self.next_local = 0;
 
         self.output.push_str(&format!("; Module Function: {}\n", full_name));
         self.output.push_str(&format!("fn_{}:\n", full_name));
 
+        let locals_count = Self::count_locals(&func.body);
+        self.output.push_str(&format!("    enter {}\n", locals_count));
+
         for (i, param) in func.params.iter().enumerate() {
-            self.local_vars.insert(param.name.clone(), i as u8);
-            self.next_local = (i + 1) as u8;
-            self.output.push_str(&format!("    ; param: {} -> local {}\n", param.name, i));
+            self.param_vars.insert(param.name.clone(), i as u8);
+            self.output.push_str(&format!("    ; param: {} -> arg {}\n", param.name, i));
         }
 
         for stmt in &func.body {
             self.generate_statement(stmt, program);
         }
 
+        self.output.push_str("    leave\n");
         self.output.push_str("    ret\n\n");
     }
 
@@ -238,7 +340,7 @@ impl NVMAssemblyGenerator {
                 self.local_vars.insert(name.clone(), local_index);
                 self.next_local += 1;
                 
-                self.output.push_str(&format!("    store {}\n", local_index));
+                self.output.push_str(&format!("    storer {}\n", local_index));
             }
 
             Statement::Assignment { name, value } => {
@@ -246,7 +348,9 @@ impl NVMAssemblyGenerator {
                 self.generate_expression(value, program);
                 
                 if let Some(&local_index) = self.local_vars.get(name) {
-                    self.output.push_str(&format!("    store {}\n", local_index));
+                    self.output.push_str(&format!("    storer {}\n", local_index));
+                } else if let Some(&arg_index) = self.param_vars.get(name) {
+                    self.output.push_str(&format!("    storea {}\n", arg_index));
                 } else {
                     self.output.push_str(&format!("    ; ERROR: Variable not found: {}\n", name));
                 }
@@ -259,14 +363,14 @@ impl NVMAssemblyGenerator {
                 let else_label = self.generate_label("else");
                 let end_label = self.generate_label("endif");
                 
-                self.output.push_str(&format!("    jz32 {}\n", else_label));
+                self.output.push_str(&format!("    jz {}\n", else_label));
                 
                 self.output.push_str("    ; then block\n");
                 for stmt in then_body {
                     self.generate_statement(stmt, program);
                 }
                 
-                self.output.push_str(&format!("    jmp32 {}\n", end_label));
+                self.output.push_str(&format!("    jmp {}\n", end_label));
                 
                 self.output.push_str(&format!("{}:\n", else_label));
                 
@@ -299,7 +403,7 @@ impl NVMAssemblyGenerator {
                 if let Some(cond) = condition {
                     self.output.push_str("    ; condition\n");
                     self.generate_expression(cond, program);
-                    self.output.push_str(&format!("    jz32 {}\n", loop_end));
+                    self.output.push_str(&format!("    jz {}\n", loop_end));
                 }
                 
                 self.output.push_str("    ; body\n");
@@ -314,15 +418,18 @@ impl NVMAssemblyGenerator {
                     self.generate_statement(post_stmt, program);
                 }
                 
-                self.output.push_str(&format!("    jmp32 {}\n", loop_start));
+                self.output.push_str(&format!("    jmp {}\n", loop_start));
                 
                 self.output.push_str(&format!("{}:\n", loop_end));
                 self.loop_stack.pop();
             }
 
             Statement::Return(value) => {
-                if let Some(_expr) = value {
+                if let Some(expr) = value {
+                    self.generate_expression(expr, program);
                 }
+                self.output.push_str("    leave\n");
+                self.output.push_str("    ret\n");
             }
 
             Statement::Expression(expr) => {
@@ -403,7 +510,9 @@ impl NVMAssemblyGenerator {
 
             Expression::Identifier(name) => {
                 if let Some(&local_index) = self.local_vars.get(name) {
-                    self.output.push_str(&format!("    load {}  ; {}\n", local_index, name));
+                    self.output.push_str(&format!("    loadr {}  ; local {}\n", local_index, name));
+                } else if let Some(&arg_index) = self.param_vars.get(name) {
+                    self.output.push_str(&format!("    loada {}  ; arg {}\n", arg_index, name));
                 } else {
                     self.output.push_str(&format!("    ; ERROR: Variable not found: {}\n", name));
                     self.output.push_str("    push 0\n");
@@ -456,22 +565,15 @@ impl NVMAssemblyGenerator {
                 }
             }
 
-            Expression::Call { function, args } => {
-                self.output.push_str(&format!("    ; call {}\n", function));
-                
-                for arg in args.iter().rev() {
-                    self.generate_expression(arg, program);
-                }
-                
-                for (i, _) in args.iter().enumerate() {
-                    let param_index = i as u8;
-                    self.output.push_str(&format!("    store {}\n", param_index));
-                }
-                
-                self.output.push_str(&format!("    call fn_{}\n", function));
-            }
+           Expression::Call { function, args } => {
+               self.output.push_str(&format!("    ; call {}\n", function));
+               for arg in args.iter().rev() {
+                   self.generate_expression(arg, program);
+               }
+               self.output.push_str(&format!("    call fn_{}\n", function));
+           }
 
-            Expression::ModuleCall { module, function, args } => {
+           Expression::ModuleCall { module, function, args } => {
                 if module == "stdio" {
                     if function == "Print" || function == "Println" {
                         self.output.push_str(&format!("    ; call {}.{}\n", module, function));
@@ -488,21 +590,25 @@ impl NVMAssemblyGenerator {
                                     self.output.push_str("    syscall print\n");
                                 }
                                 if function == "Println" {
-                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    push '\\n'\n");
                                     self.output.push_str("    syscall print\n");
                                 }
                             } else if let Expression::TemplateString { .. } = &args[0] {
                                 self.generate_expression(&args[0], program);
                                 if function == "Println" {
-                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    push '\\n'\n");
                                     self.output.push_str("    syscall print\n");
                                 }
                             } else {
                                 self.generate_expression(&args[0], program);
+                                // save result of expression into scratch local before printing
+                                self.output.push_str(&format!("    storer {}\n", self.scratch_local));
                                 self.ensure_print_int_helper();
+                                // load saved result for print
+                                self.output.push_str(&format!("    loadr {}\n", self.scratch_local));
                                 self.output.push_str("    call __print_int_sys\n");
                                 if function == "Println" {
-                                    self.output.push_str("    push '\n'\n");
+                                    self.output.push_str("    push '\\n'\n");
                                     self.output.push_str("    syscall print\n");
                                 }
                             }

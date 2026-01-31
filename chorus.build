@@ -1,15 +1,11 @@
 variables:
   CC: "cargo"
-  CFLAGS: "build --release -q"
+  CFLAGS: "build --release"
 
 targets:
   all:
-    deps: [bin, mv]
+    deps: [bin]
 
   bin:
     cmds:
       - "${CC} ${CFLAGS}" 
-
-  mv:
-    cmds:
-      - "sudo mv ./target/release/perano /bin/perano" 

@@ -17,6 +17,7 @@
 #define NVM_API
 #endif
 
+
 NVM_API int nvm_assemble_file(const char *input_path, const char *output_path);
 
 NVM_API int nvm_assemble_from_str(const char *asm_source, const char *output_path) {
@@ -114,15 +115,34 @@ int find_syscall(const char *name) {
 }
 
 uint32_t parse_number(const char *str) {
-    if (str[0] == '\'' && str[1] != '\0' && str[2] == '\'') {
-        return (uint32_t)str[1];
+    if (str[0] == '\'' ) {
+        size_t len = strlen(str);
+        if (len >= 3 && str[len-1] == '\'') {
+            if (str[1] == '\\') {
+                char esc = str[2];
+                switch (esc) {
+                    case 'n': return (uint32_t)('\n');
+                    case 'r': return (uint32_t)('\r');
+                    case 't': return (uint32_t)('\t');
+                    case '\\': return (uint32_t)('\\');
+                    case '\'': return (uint32_t)('\'');
+                    default: return (uint32_t)esc;
+                }
+            } else {
+                return (uint32_t)str[1];
+            }
+        }
     }
-    else if (strncmp(str, "0x", 2) == 0) {
+    if (strncmp(str, "0x", 2) == 0) {
         return (uint32_t)strtol(str + 2, NULL, 16);
-    } 
-    else {
-        return (uint32_t)atoi(str);
     }
+    if (str[0] != '\0' && str[1] == '\0') {
+        if (!isdigit((unsigned char)str[0])) {
+            return (uint32_t)(unsigned char)str[0];
+        }
+        return (uint32_t)(str[0] - '0');
+    }
+    return (uint32_t)atoi(str);
 }
 
 char* generate_output_filename(const char *input_filename) {
@@ -191,11 +211,18 @@ int get_instruction_size(char *tokens[], int token_count) {
     else if (strcasecmp(tokens[0], "gt") == 0) return 1;
     else if (strcasecmp(tokens[0], "lt") == 0) return 1;
     
-    else if (strcasecmp(tokens[0], "jmp") == 0) return 5;    
-    else if (strcasecmp(tokens[0], "jz") == 0) return 5;     
-    else if (strcasecmp(tokens[0], "jnz") == 0) return 5;    
-    else if (strcasecmp(tokens[0], "call") == 0) return 5;   
+    else if (strcasecmp(tokens[0], "jmp") == 0 || strcasecmp(tokens[0], "jmp32") == 0) return 5;    
+    else if (strcasecmp(tokens[0], "jz") == 0  || strcasecmp(tokens[0], "jz32") == 0) return 5;     
+    else if (strcasecmp(tokens[0], "jnz") == 0 || strcasecmp(tokens[0], "jnz32") == 0) return 5;    
+    else if (strcasecmp(tokens[0], "call") == 0|| strcasecmp(tokens[0], "call32") == 0) return 5;   
     else if (strcasecmp(tokens[0], "ret") == 0) return 1;
+    
+    else if (strcasecmp(tokens[0], "enter") == 0) return 2;  
+    else if (strcasecmp(tokens[0], "leave") == 0) return 1;  
+    else if (strcasecmp(tokens[0], "load_rel") == 0 || strcasecmp(tokens[0], "loadr") == 0) return 2;  
+    else if (strcasecmp(tokens[0], "store_rel") == 0 || strcasecmp(tokens[0], "storer") == 0) return 2; 
+    else if (strcasecmp(tokens[0], "load_arg") == 0 || strcasecmp(tokens[0], "loada") == 0) return 2; 
+    else if (strcasecmp(tokens[0], "store_arg") == 0 || strcasecmp(tokens[0], "storea") == 0) return 2; 
     
     else if (strcasecmp(tokens[0], "load") == 0) return 2;   
     else if (strcasecmp(tokens[0], "store") == 0) return 2;  
@@ -358,8 +385,6 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
             uint32_t value = parse_number(tokens[1]);
             write_32bit_value(output, value);
             current_address += 5;
-            
-            
             printf("DEBUG: PUSH32 0x%08X (%d) at address %d\n", value, value, current_address - 5);
         }
         else if (strcasecmp(tokens[0], "pop") == 0) {
@@ -417,7 +442,7 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
             current_address += 1;
         }
         
-        else if (strcasecmp(tokens[0], "jmp") == 0 && token_count >= 2) {
+        else if ((strcasecmp(tokens[0], "jmp") == 0 || strcasecmp(tokens[0], "jmp32") == 0) && token_count >= 2) {
             fputc(0x30, output); 
             uint32_t addr;
             if (find_label(tokens[1], &addr)) {
@@ -428,7 +453,7 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
             }
             current_address += 5;
         }
-        else if (strcasecmp(tokens[0], "jz") == 0 && token_count >= 2) {
+        else if ((strcasecmp(tokens[0], "jz") == 0 || strcasecmp(tokens[0], "jz32") == 0) && token_count >= 2) {
             fputc(0x31, output); 
             uint32_t addr;
             if (find_label(tokens[1], &addr)) {
@@ -439,7 +464,7 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
             }
             current_address += 5;
         }
-        else if (strcasecmp(tokens[0], "jnz") == 0 && token_count >= 2) {
+        else if ((strcasecmp(tokens[0], "jnz") == 0 || strcasecmp(tokens[0], "jnz32") == 0) && token_count >= 2) {
             fputc(0x32, output); 
             uint32_t addr;
             if (find_label(tokens[1], &addr)) {
@@ -450,7 +475,7 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
             }
             current_address += 5;
         }
-        else if (strcasecmp(tokens[0], "call") == 0 && token_count >= 2) {
+        else if ((strcasecmp(tokens[0], "call") == 0 || strcasecmp(tokens[0], "call32") == 0) && token_count >= 2) {
             fputc(0x33, output); 
             uint32_t addr;
             if (find_label(tokens[1], &addr)) {
@@ -464,6 +489,41 @@ NVM_API int nvm_assemble_file(const char *input_path, const char *output_path) {
         else if (strcasecmp(tokens[0], "ret") == 0) {
             fputc(0x34, output);
             current_address += 1;
+        }
+        
+        else if (strcasecmp(tokens[0], "enter") == 0 && token_count >= 2) {
+            fputc(0x35, output);
+            uint8_t count = (uint8_t)parse_number(tokens[1]);
+            fputc(count, output);
+            current_address += 2;
+        }
+        else if (strcasecmp(tokens[0], "leave") == 0) {
+            fputc(0x36, output);
+            current_address += 1;
+        }
+        else if ((strcasecmp(tokens[0], "load_rel") == 0 || strcasecmp(tokens[0], "loadr") == 0) && token_count >= 2) {
+            fputc(0x42, output);
+            uint8_t off = (uint8_t)parse_number(tokens[1]);
+            fputc(off, output);
+            current_address += 2;
+        }
+        else if ((strcasecmp(tokens[0], "store_rel") == 0 || strcasecmp(tokens[0], "storer") == 0) && token_count >= 2) {
+            fputc(0x43, output);
+            uint8_t off = (uint8_t)parse_number(tokens[1]);
+            fputc(off, output);
+            current_address += 2;
+        }
+        else if ((strcasecmp(tokens[0], "load_arg") == 0 || strcasecmp(tokens[0], "loada") == 0) && token_count >= 2) {
+            fputc(0x37, output);
+            uint8_t off = (uint8_t)parse_number(tokens[1]);
+            fputc(off, output);
+            current_address += 2;
+        }
+        else if ((strcasecmp(tokens[0], "store_arg") == 0 || strcasecmp(tokens[0], "storea") == 0) && token_count >= 2) {
+            fputc(0x38, output);
+            uint8_t off = (uint8_t)parse_number(tokens[1]);
+            fputc(off, output);
+            current_address += 2;
         }
         
         else if (strcasecmp(tokens[0], "load") == 0 && token_count >= 2) {
