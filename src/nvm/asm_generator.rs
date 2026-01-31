@@ -9,6 +9,7 @@ pub struct NVMAssemblyGenerator {
     local_vars: HashMap<String, u8>,
     next_local: u8,
     param_vars: HashMap<String, u8>,
+    param_types: HashMap<String, String>,
     loop_stack: Vec<(String, String)>,
     current_function: String,
     print_int_helper_emitted: bool,
@@ -161,6 +162,7 @@ impl NVMAssemblyGenerator {
             local_vars: HashMap::new(),
             next_local: 0,
             param_vars: HashMap::new(),
+            param_types: HashMap::new(),
             loop_stack: Vec::new(),
             current_function: String::new(),
             print_int_helper_emitted: false,
@@ -267,9 +269,9 @@ impl NVMAssemblyGenerator {
         self.current_function = func.name.clone();
         self.local_vars.clear();
         self.param_vars.clear();
+        self.param_types.clear();
         self.next_local = 0;
 
-        self.output.push_str(&format!("; Function: {}\n", func.name));
         self.output.push_str(&format!("fn_{}:\n", func.name));
 
         
@@ -280,7 +282,7 @@ impl NVMAssemblyGenerator {
 
         for (i, param) in func.params.iter().enumerate() {
             self.param_vars.insert(param.name.clone(), i as u8);
-            self.output.push_str(&format!("    ; param: {} -> arg {}\n", param.name, i));
+            self.param_types.insert(param.name.clone(), param.param_type.clone());
         }
 
         for stmt in &func.body {
@@ -288,7 +290,6 @@ impl NVMAssemblyGenerator {
         }
 
         if func.name == "main" && !self.has_return_or_exit(&func.body) {
-            self.output.push_str("    ; Main returns 0 by default\n");
             self.output.push_str("    push 10\n");
             self.output.push_str("    syscall print\n");
             self.output.push_str("    push 0\n");
@@ -303,32 +304,37 @@ impl NVMAssemblyGenerator {
         self.current_function = full_name.to_string();
         self.local_vars.clear();
         self.param_vars.clear();
+        self.param_types.clear();
         self.next_local = 0;
 
-        self.output.push_str(&format!("; Module Function: {}\n", full_name));
         self.output.push_str(&format!("fn_{}:\n", full_name));
 
-        let locals_count = Self::count_locals(&func.body);
-        self.output.push_str(&format!("    enter {}\n", locals_count));
+        let is_string_syscall = full_name.starts_with("novaria_") && 
+            (full_name.ends_with("_Open") || full_name.ends_with("_Create") || full_name.ends_with("_Delete"));
+        
+        if !is_string_syscall {
+            let locals_count = Self::count_locals(&func.body);
+            self.output.push_str(&format!("    enter {}\n", locals_count));
+        }
 
         for (i, param) in func.params.iter().enumerate() {
             self.param_vars.insert(param.name.clone(), i as u8);
-            self.output.push_str(&format!("    ; param: {} -> arg {}\n", param.name, i));
+            self.param_types.insert(param.name.clone(), param.param_type.clone());
         }
 
         for stmt in &func.body {
             self.generate_statement(stmt, program);
         }
 
-        self.output.push_str("    leave\n");
+        if !is_string_syscall {
+            self.output.push_str("    leave\n");
+        }
         self.output.push_str("    ret\n\n");
     }
 
     fn generate_statement(&mut self, stmt: &Statement, program: &Program) {
         match stmt {
             Statement::VarDecl { name, var_type, value } => {
-                self.output.push_str(&format!("    ; var {} {}\n", name, 
-                    var_type.as_ref().map(|t| t.as_str()).unwrap_or("int")));
                 
                 if let Some(init_expr) = value {
                     self.generate_expression(init_expr, program);
@@ -344,7 +350,6 @@ impl NVMAssemblyGenerator {
             }
 
             Statement::Assignment { name, value } => {
-                self.output.push_str(&format!("    ; {} = ...\n", name));
                 self.generate_expression(value, program);
                 
                 if let Some(&local_index) = self.local_vars.get(name) {
@@ -357,7 +362,6 @@ impl NVMAssemblyGenerator {
             }
 
             Statement::If { condition, then_body, else_body } => {
-                self.output.push_str("    ; if condition\n");
                 self.generate_expression(condition, program);
                 
                 let else_label = self.generate_label("else");
@@ -365,7 +369,6 @@ impl NVMAssemblyGenerator {
                 
                 self.output.push_str(&format!("    jz {}\n", else_label));
                 
-                self.output.push_str("    ; then block\n");
                 for stmt in then_body {
                     self.generate_statement(stmt, program);
                 }
@@ -375,7 +378,6 @@ impl NVMAssemblyGenerator {
                 self.output.push_str(&format!("{}:\n", else_label));
                 
                 if let Some(else_stmts) = else_body {
-                    self.output.push_str("    ; else block\n");
                     for stmt in else_stmts {
                         self.generate_statement(stmt, program);
                     }
@@ -385,7 +387,6 @@ impl NVMAssemblyGenerator {
             }
 
             Statement::For { init, condition, post, body } => {
-                self.output.push_str("    ; for loop\n");
                 
                 if let Some(init_stmt) = init {
                     self.output.push_str("    ; init\n");
@@ -439,28 +440,79 @@ impl NVMAssemblyGenerator {
             Statement::InlineAsm { parts } => {
                 use crate::ast::AsmPart;
                 
-                self.output.push_str("    ; inline asm\n");
                 
-                for part in parts {
-                    match part {
+                let mut i = 0;
+                while i < parts.len() {
+                    match &parts[i] {
                         AsmPart::Literal(s) => {
                             for line in s.lines() {
                                 let trimmed = line.trim();
                                 if !trimmed.is_empty() {
                                     self.output.push_str("    ");
                                     self.output.push_str(trimmed);
+
+                                    if i + 1 < parts.len() {
+                                        if let AsmPart::Variable(var_name) = &parts[i + 1] {
+                                            let instr = trimmed.split_whitespace().next().unwrap_or("");
+                                            match instr.to_lowercase().as_str() {
+                                                "push" => {
+                                                    if let Some(var_type) = self.param_types.get(var_name) {
+                                                        if var_type == "string" {
+                                                            self.output.push_str(&format!("\n    ; ERROR: Cannot push string parameter '{}' - strings not yet supported in inline asm\n", var_name));
+                                                            self.output.push_str("    ; TODO: Implement string expansion");
+                                                        } else {
+                                                            self.output.push_str(&format!(" {}", self.param_vars.get(var_name).unwrap()));
+                                                        }
+                                                    } else if let Some(&local_index) = self.local_vars.get(var_name) {
+                                                        self.output.push_str(&format!(" {}", local_index));
+                                                    } else {
+                                                        self.output.push_str(&format!("\n    ; ERROR: Unknown variable: {}\n", var_name));
+                                                    }
+                                                }
+                                                "load" => {
+                                                    if let Some(&param_index) = self.param_vars.get(var_name) {
+                                                        self.output.push_str("a");
+                                                        self.output.push_str(&format!(" {}", param_index));
+                                                    } else if let Some(&local_index) = self.local_vars.get(var_name) {
+                                                        self.output.push_str("r");
+                                                        self.output.push_str(&format!(" {}", local_index));
+                                                    } else {
+                                                        self.output.push_str(&format!("\n    ; ERROR: Unknown variable: {}\n", var_name));
+                                                    }
+                                                }
+                                                "store" => {
+                                                    if let Some(&param_index) = self.param_vars.get(var_name) {
+                                                        self.output.push_str("a");
+                                                        self.output.push_str(&format!(" {}", param_index));
+                                                    } else if let Some(&local_index) = self.local_vars.get(var_name) {
+                                                        self.output.push_str("r");
+                                                        self.output.push_str(&format!(" {}", local_index));
+                                                    } else {
+                                                        self.output.push_str(&format!("\n    ; ERROR: Unknown variable: {}\n", var_name));
+                                                    }
+                                                }
+                                                _ => {
+                                                    if let Some(&param_index) = self.param_vars.get(var_name) {
+                                                        self.output.push_str(&format!(" {}", param_index));
+                                                    } else if let Some(&local_index) = self.local_vars.get(var_name) {
+                                                        self.output.push_str(&format!(" {}", local_index));
+                                                    } else {
+                                                        self.output.push_str(&format!("\n    ; ERROR: Unknown variable: {}\n", var_name));
+                                                    }
+                                                }
+                                            }
+                                            i += 1;
+                                        }
+                                    }
+                                    
                                     self.output.push_str("\n");
                                 }
                             }
                         }
-                        AsmPart::Variable(var_name) => {
-                            if let Some(&local_index) = self.local_vars.get(var_name) {
-                                self.output.push_str(&format!("    load {}\n", local_index));
-                            } else {
-                                self.output.push_str(&format!("    ; ERROR: Unknown variable: {}\n", var_name));
-                            }
+                        AsmPart::Variable(_) => {
                         }
                     }
+                    i += 1;
                 }
             }
 
@@ -601,10 +653,8 @@ impl NVMAssemblyGenerator {
                                 }
                             } else {
                                 self.generate_expression(&args[0], program);
-                                // save result of expression into scratch local before printing
                                 self.output.push_str(&format!("    storer {}\n", self.scratch_local));
                                 self.ensure_print_int_helper();
-                                // load saved result for print
                                 self.output.push_str(&format!("    loadr {}\n", self.scratch_local));
                                 self.output.push_str("    call __print_int_sys\n");
                                 if function == "Println" {
@@ -618,6 +668,23 @@ impl NVMAssemblyGenerator {
                 }
 
                 self.output.push_str(&format!("    ; call {}.{}\n", module, function));
+
+                if module == "novaria" {
+                    let string_syscalls = [("Open", 2), ("Create", 5), ("Delete", 6)];
+                    for &(name, syscall_num) in &string_syscalls {
+                        if function == name && !args.is_empty() {
+                            if let Expression::String(s) = &args[0] {
+                                self.output.push_str("    push 0\n");
+                                for &ch in s.as_bytes().iter().rev() {
+                                    self.output.push_str(&format!("    push {}\n", ch));
+                                }
+                                self.output.push_str(&format!("    syscall {}\n", syscall_num));
+                                return;
+                            }
+                        }
+                    }
+                }
+                
                 for arg in args.iter().rev() {
                     self.generate_expression(arg, program);
                 }

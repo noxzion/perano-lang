@@ -49,6 +49,7 @@ pub struct NVMCodeGen {
     labels: HashMap<String, u32>,
     label_patches: Vec<(u32, String)>,
     local_vars: HashMap<String, u8>,
+    params: HashMap<String, u8>,
     next_local: u8,
     loop_stack: Vec<(String, String)>,
     current_function: String,
@@ -63,6 +64,7 @@ impl NVMCodeGen {
             labels: HashMap::new(),
             label_patches: Vec::new(),
             local_vars: HashMap::new(),
+            params: HashMap::new(),
             next_local: 0,
             loop_stack: Vec::new(),
             current_function: String::new(),
@@ -143,15 +145,15 @@ impl NVMCodeGen {
     fn generate_function(&mut self, func: &Function, program: &Program) {
         self.current_function = func.name.clone();
         self.local_vars.clear();
+        self.params.clear();
         self.compile_time_strings.clear();
         self.next_local = 0;
 
         let func_label = format!("func_{}", func.name);
         self.add_label(&func_label);
 
-        for param in &func.params {
-            self.local_vars.insert(param.name.clone(), self.next_local);
-            self.next_local += 1;
+        for (idx, param) in func.params.iter().enumerate() {
+            self.params.insert(param.name.clone(), idx as u8);
         }
 
         for stmt in &func.body {
@@ -175,14 +177,14 @@ impl NVMCodeGen {
     fn generate_module_function(&mut self, func: &Function, full_name: &str, program: &Program) {
         self.current_function = full_name.to_string();
         self.local_vars.clear();
+        self.params.clear();
         self.next_local = 0;
 
         let func_label = format!("func_{}", full_name);
         self.add_label(&func_label);
 
-        for param in &func.params {
-            self.local_vars.insert(param.name.clone(), self.next_local);
-            self.next_local += 1;
+        for (idx, param) in func.params.iter().enumerate() {
+            self.params.insert(param.name.clone(), idx as u8);
         }
 
         for stmt in &func.body {
@@ -215,11 +217,13 @@ impl NVMCodeGen {
             Statement::Assignment { name, value } => {
                 self.generate_expression(value, program);
                 
-                if let Some(&local_index) = self.local_vars.get(name) {
+                if let Some(&param_index) = self.params.get(name) {
+                    self.emit_byte(0x43);
+                    self.emit_byte(param_index);
+                } else if let Some(&local_index) = self.local_vars.get(name) {
                     self.emit_byte(STORE);
                     self.emit_byte(local_index);
                 } else {
-                    
                     panic!("Variable not found: {}", name);
                 }
             }
@@ -316,6 +320,8 @@ impl NVMCodeGen {
                             if let Some(string_value) = self.compile_time_strings.get(var_name) {
                                 asm_text.push_str(string_value);
                                 asm_text.push('\n');
+                            } else if let Some(&param_index) = self.params.get(var_name) {
+                                asm_text.push_str(&format!("loada {}\n", param_index));
                             } else if let Some(&local_index) = self.local_vars.get(var_name) {
                                 asm_text.push_str(&format!("load {}\n", local_index));
                             } else {
@@ -382,7 +388,10 @@ impl NVMCodeGen {
             }
 
             Expression::Identifier(name) => {
-                if let Some(&local_index) = self.local_vars.get(name) {
+                if let Some(&param_index) = self.params.get(name) {
+                    self.emit_byte(0x42);
+                    self.emit_byte(param_index);
+                } else if let Some(&local_index) = self.local_vars.get(name) {
                     self.emit_byte(LOAD);
                     self.emit_byte(local_index);
                 } else {
@@ -751,6 +760,38 @@ impl NVMCodeGen {
                 }
             }
             "ret" => self.emit_byte(RET),
+            "load" => {
+                if parts.len() > 1 {
+                    if let Ok(index) = parts[1].parse::<u8>() {
+                        self.emit_byte(LOAD);
+                        self.emit_byte(index);
+                    }
+                }
+            }
+            "store" => {
+                if parts.len() > 1 {
+                    if let Ok(index) = parts[1].parse::<u8>() {
+                        self.emit_byte(STORE);
+                        self.emit_byte(index);
+                    }
+                }
+            }
+            "loada" => {
+                if parts.len() > 1 {
+                    if let Ok(index) = parts[1].parse::<u8>() {
+                        self.emit_byte(0x42);
+                        self.emit_byte(index);
+                    }
+                }
+            }
+            "storea" => {
+                if parts.len() > 1 {
+                    if let Ok(index) = parts[1].parse::<u8>() {
+                        self.emit_byte(0x43);
+                        self.emit_byte(index);
+                    }
+                }
+            }
             _ => {}
         }
     }
