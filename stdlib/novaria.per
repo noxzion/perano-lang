@@ -1,6 +1,6 @@
 package novaria
 
-pub fn Open(path string) int {
+pub fn open(path string) int {
     var fd int
     asm {
         syscall 2
