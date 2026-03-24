@@ -8,7 +8,8 @@ This repository contains the Perano compiler, Perano's standard library and tool
 <br>
 
 > [!IMPORTANT]
-> The current implementation of Perano is not final. It may be unstable and non-fully.
+> ~The current implementation of Perano is not final. It may be unstable and non-fully.~
+> Project is archived. Use [ncc](https://github.com/novariaos/ncc.git)
 
 
 ### Examples
